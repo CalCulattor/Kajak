@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Kajak" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- Tło okna zgodne z motywem Compose, żeby przy starcie nie było białego błysku. -->
+    <style name="Theme.Kajak" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#F5F9FA</item>
+        <item name="android:colorBackground">#F5F9FA</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
 </resources>

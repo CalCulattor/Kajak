@@ -88,3 +88,7 @@ data/     Room (db/), klienty API (remote/), repozytoria
 ui/       ekrany Compose, ViewModele, nawigacja
 util/     lokalizacja, formatowanie
 ```
+
+## Interfejs
+
+Dolny pasek ma cztery zakładki w kolejności: **Start** (rozpoczęcie trasy, ostatnia trasa, sumy), **Historia** (trasy pogrupowane miesiącami), **Spływy**, **Rzeki**. Motyw (`ui/Theme.kt`) jest jasny i ciemny, ma chłodne, wodne tło, granatowy kolor główny i jeden pomarańczowy akcent (kamizelka) używany tylko do startu i nagrywania. Karty są płaskie, cyfry tabelaryczne, elementy dotykowe duże (czytelność w słońcu).

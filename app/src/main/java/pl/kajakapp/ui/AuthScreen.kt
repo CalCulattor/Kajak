@@ -21,7 +21,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -79,7 +78,7 @@ fun AuthScreen(onBack: () -> Unit, onDone: () -> Unit) {
     Scaffold(
         contentWindowInsets = NoInsets,
         topBar = {
-            TopAppBar(
+            AppTopBar(
                 windowInsets = NoInsets,
                 title = { Text(if (registering) "Rejestracja" else "Logowanie") },
                 navigationIcon = {
