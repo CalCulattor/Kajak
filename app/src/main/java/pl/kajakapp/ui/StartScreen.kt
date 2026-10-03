@@ -81,7 +81,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import pl.kajakapp.data.PersonOnMap
-import pl.kajakapp.util.LocationHelper
 import pl.kajakapp.domain.PathPoint
 import pl.kajakapp.data.LiveTrack
 import pl.kajakapp.data.db.TrackEntity
@@ -95,7 +94,6 @@ import kotlin.math.max
 private var askedAtEntry = false
 
 private const val PEOPLE_REFRESH_MS = 8_000L
-private const val SHARE_REFRESH_MS = 10_000L
 private const val GPS_FRESH_MS = 15_000L
 private const val STARTING_WAIT_MS = 8_000L
 private const val STOPPING_WAIT_MS = 20_000L
@@ -140,16 +138,11 @@ fun StartScreen(
     val me by container.settings.session.collectAsStateWithLifecycle()
     val myName = me?.username
 
-    // Spływ, którego uczestników pokazujemy na mapie i któremu wysyłamy swoją pozycję: ten, do którego
-    // przypisano nagrywaną trasę, potem wybrany ręcznie, a w ostateczności najbliższy terminem spływ
-    // z serwera. Tylko spływy udostępnione na serwerze mogą pokazywać innych uczestników.
-    val nowMs = System.currentTimeMillis()
-    val contextTrip = pickContextTrip(state.trips, live?.tripId, nowMs)
-    // Swoją pozycję udostępniamy i do spływu przypisujemy trasę tylko wtedy, gdy spływ trwa, został
-    // wybrany ręcznie albo już do niego nagrywamy – nie dla odległego terminem „najbliższego” spływu.
-    val sharingTrip = contextTrip?.takeIf {
-        it.id == live?.tripId || isOngoing(it, nowMs)
-    }
+    // Spływ „aktualnie rozpoczęty”: ten, do którego nagrywasz trasę, a bez nagrywania – udostępniony na serwerze
+    // spływ trwający teraz (służy tylko do wezwania pomocy i do alarmów innych osób). Pozycje uczestników
+    // widać wyłącznie podczas nagrywania trasy w tym spływie i tylko osób z tego samego spływu.
+    val contextTrip = pickContextTrip(state.trips, live?.tripId, System.currentTimeMillis())
+    val sharingNow = live?.tripId != null && live.tripId == contextTrip?.id
 
     // Po powrocie do aplikacji odświeżamy pozycje od razu, a w tle nie odpytujemy serwera.
     var resumed by remember { mutableStateOf(true) }
@@ -182,24 +175,11 @@ fun StartScreen(
         }
     }
 
-    // Własną pozycję wysyła usługa nagrywania, gdy trasa jest przypisana do tego spływu. Poza
-    // nagrywaniem (i bez przypisania) wysyłamy ją stąd, dopóki aplikacja jest na ekranie.
-    val recordingHere = live?.tripId != null && live.tripId == contextTrip?.id
-    var shareError by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(sharingTrip?.id, myName, locationGranted, recordingHere, resumed) {
-        shareError = null
-        val tripId = sharingTrip?.id ?: return@LaunchedEffect
-        if (myName == null || !locationGranted || recordingHere || !resumed) return@LaunchedEffect
-        val helper = LocationHelper(context.applicationContext)
-        while (true) {
-            val point = helper.current()
-            shareError = if (point == null) "brak sygnału GPS – nie wysyłam pozycji."
-            else container.sync.pushLocation(tripId, point.lat, point.lon, point.fixAt)
-            delay(SHARE_REFRESH_MS)
-        }
-    }
-
+    // Własną pozycję wysyła usługa nagrywania (co ok. 10 s) tylko, gdy trasa jest przypisana do spływu,
+    // a po zakończeniu trasy przestaje ją udostępniać.
     val others = people.filter { !it.name.equals(myName, ignoreCase = true) }
+    // Zwykłe pozycje tylko podczas nagrywania; wezwania pomocy widać zawsze.
+    val mapPeople = if (sharingNow) others else others.filter { it.needsHelp }
     val helpers = others.filter { it.needsHelp }
     val myAlert = people.firstOrNull { it.needsHelp && it.name.equals(myName, ignoreCase = true) }
 
@@ -351,7 +331,7 @@ fun StartScreen(
                 followUser = locationGranted,
                 ornamentsOnTop = true,
                 recenterKey = recenter,
-                people = others,
+                people = mapPeople,
                 focus = focusPoint,
                 focusKey = focusKey
             )
@@ -368,10 +348,10 @@ fun StartScreen(
                 modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-            val problem = peopleError ?: shareError
+            val problem = peopleError
             if (contextTrip != null && myName != null && problem != null) {
                 InfoBanner("Uczestnicy: $problem")
-            } else if (contextTrip != null && myName != null && peopleLoaded && others.isEmpty()) {
+            } else if (contextTrip != null && myName != null && sharingNow && peopleLoaded && others.isEmpty()) {
                 InfoBanner("Nikt inny w spływie „${contextTrip.title}” nie udostępnia teraz pozycji.")
             }
             helpers.forEach { person ->
@@ -491,7 +471,7 @@ fun StartScreen(
     if (showStart) {
         StartTrackDialog(
             trips = state.trips,
-            defaultTrip = sharingTrip,
+            defaultTrip = contextTrip,
             onDismiss = { showStart = false },
             onStart = { title, trip ->
                 showStart = false
@@ -615,7 +595,7 @@ private fun pickContextTrip(trips: List<TripEntity>, liveTripId: Long?, now: Lon
     liveTripId?.let { id -> shared.firstOrNull { it.id == id }?.let { return it } }
     // Data spływu to północ UTC, a spływ może trwać kilka dni – okno jest szerokie z obu stron.
     val ongoing = shared.filter { isOngoing(it, now) }
-    return (ongoing.ifEmpty { shared }).minByOrNull { abs(it.startDateUtcMillis - now) }
+    return ongoing.minByOrNull { abs(it.startDateUtcMillis - now) }
 }
 
 private fun isOngoing(trip: TripEntity, now: Long): Boolean {

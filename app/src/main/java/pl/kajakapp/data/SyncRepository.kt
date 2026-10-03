@@ -818,6 +818,19 @@ class SyncRepository(
         }
     }
 
+    /** Przestaje udostępniać własną pozycję (koniec trasy w spływie). Best effort – pozycja i tak wygasa po ok. 90 s. */
+    suspend fun clearLocation(localTripId: Long) {
+        if (!enabled || !loggedIn) return
+        try {
+            val serverTripId = tripDao.getTrip(localTripId)?.serverId ?: return
+            api().deleteLocation(serverTripId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Brak sieci: serwer zapomni pozycję sam.
+        }
+    }
+
     /** Pozycje uczestników spływu albo opis problemu (np. serwer bez obsługi pozycji, brak sieci). */
     suspend fun fetchLocations(localTripId: Long): LocationsResult {
         if (!enabled) return LocationsResult(error = "Serwer jest wyłączony w ustawieniach.")

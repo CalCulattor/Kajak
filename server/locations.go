@@ -10,7 +10,8 @@ import (
 // Pozycje uczestników na żywo. Trzymamy tylko ostatnią pozycję każdego użytkownika w pamięci
 // (nie zapisujemy ich do pliku danych) i zapominamy je po liveLocationTTL – to dane chwilowe.
 
-const liveLocationTTL = 15 * time.Minute
+// Pozycję wysyła się co kilka sekund, więc osoba, która przestała (koniec trasy, brak sieci), znika po 90 s.
+const liveLocationTTL = 90 * time.Second
 
 // LiveLocation to ostatnia znana pozycja uczestnika spływu.
 type LiveLocation struct {
@@ -52,9 +53,19 @@ func (st *Store) SetLiveLocation(tripID int64, user string, loc LiveLocation) er
 	return nil
 }
 
+// ClearLiveLocation usuwa pozycję użytkownika (koniec trasy w spływie).
+func (st *Store) ClearLiveLocation(tripID int64, user string) {
+	st.liveMu.Lock()
+	defer st.liveMu.Unlock()
+	delete(st.live[tripID], strings.ToLower(user))
+}
+
 // ListLocations zwraca aktualne pozycje uczestników. Prośba o pomoc pochodzi z najnowszego
 // zameldowania danej osoby (jeśli ma needs_help, osoba widnieje na liście nawet bez świeżej pozycji).
-func (st *Store) ListLocations(tripID int64) ([]LocationView, error) {
+//
+// Pozycje na żywo widzi tylko ten, kto sam ją teraz udostępnia (jest w trakcie trasy w tym spływie);
+// pozostali widzą wyłącznie osoby wzywające pomocy.
+func (st *Store) ListLocations(tripID int64, viewer string) ([]LocationView, error) {
 	now := st.now()
 	st.mu.RLock()
 	if !tripExists(&st.s, tripID) {
@@ -90,6 +101,11 @@ func (st *Store) ListLocations(tripID int64) ([]LocationView, error) {
 		live[key] = loc
 	}
 	st.liveMu.Unlock()
+
+	_, viewerSharing := live[strings.ToLower(viewer)]
+	if !viewerSharing {
+		live = map[string]LiveLocation{}
+	}
 
 	out := []LocationView{}
 	seen := map[string]bool{}
@@ -164,13 +180,28 @@ func (srv *Server) listLocations(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, ok := srv.requireMember(w, r, tripID); !ok {
+	viewer, ok := srv.requireMember(w, r, tripID)
+	if !ok {
 		return
 	}
-	list, err := srv.store.ListLocations(tripID)
+	list, err := srv.store.ListLocations(tripID, viewer)
 	if err != nil {
 		storeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+// deleteLocation przestaje udostępniać własną pozycję (koniec trasy w spływie).
+func (srv *Server) deleteLocation(w http.ResponseWriter, r *http.Request) {
+	tripID, ok := pathID(w, r, "id")
+	if !ok {
+		return
+	}
+	user, ok := srv.requireMember(w, r, tripID)
+	if !ok {
+		return
+	}
+	srv.store.ClearLiveLocation(tripID, user)
+	w.WriteHeader(http.StatusNoContent)
 }

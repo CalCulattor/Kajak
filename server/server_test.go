@@ -457,11 +457,41 @@ func TestLiveLocationsAndHelp(t *testing.T) {
 		t.Fatalf("zapis pozycji: %d", code)
 	}
 
+	// Kto sam nie udostępnia pozycji (nie jest w trakcie trasy), nie widzi pozycji innych.
 	var list []LocationView
 	_, body = call(t, "GET", tripURL+"/locations", nil)
 	decodeInto(t, body, &list)
-	if len(list) != 1 || list[0].Username != "Ola" || list[0].NeedsHelp {
+	if len(list) != 0 {
+		t.Fatalf("organizator bez własnej pozycji widzi innych: %+v", list)
+	}
+	if code, _ := call(t, "PUT", tripURL+"/location", map[string]any{"lat": 49.5, "lon": 20.5}); code != 204 {
+		t.Fatalf("zapis pozycji organizatora: %d", code)
+	}
+	_, body = call(t, "GET", tripURL+"/locations", nil)
+	decodeInto(t, body, &list)
+	if len(list) != 2 {
 		t.Fatalf("lista pozycji: %+v", list)
+	}
+	var olaPos *LocationView
+	for i := range list {
+		if list[i].Username == "Ola" {
+			olaPos = &list[i]
+		}
+	}
+	if olaPos == nil || olaPos.NeedsHelp {
+		t.Fatalf("brak Oli na liście: %+v", list)
+	}
+	// Po zakończeniu trasy pozycja znika.
+	if code, _ := callAs(t, ola, "DELETE", tripURL+"/location", nil); code != 204 {
+		t.Fatalf("usunięcie pozycji: %d", code)
+	}
+	_, body = call(t, "GET", tripURL+"/locations", nil)
+	decodeInto(t, body, &list)
+	if len(list) != 1 {
+		t.Fatalf("po usunięciu pozycji Oli: %+v", list)
+	}
+	if code, _ := callAs(t, ola, "PUT", tripURL+"/location", put); code != 204 {
+		t.Fatalf("ponowny zapis Oli: %d", code)
 	}
 
 	// Wezwanie pomocy (zameldowanie z needs_help) oznacza osobę na liście.
@@ -475,7 +505,7 @@ func TestLiveLocationsAndHelp(t *testing.T) {
 	decodeInto(t, body, &ci)
 	_, body = call(t, "GET", tripURL+"/locations", nil)
 	decodeInto(t, body, &list)
-	if len(list) != 1 || !list[0].NeedsHelp || list[0].HelpCheckInID != ci.ID {
+	if p := findLocation(list, "Ola"); p == nil || !p.NeedsHelp || p.HelpCheckInID != ci.ID {
 		t.Fatalf("pomoc na liście: %+v", list)
 	}
 
@@ -485,7 +515,56 @@ func TestLiveLocationsAndHelp(t *testing.T) {
 	}
 	_, body = call(t, "GET", tripURL+"/locations", nil)
 	decodeInto(t, body, &list)
-	if len(list) != 1 || list[0].NeedsHelp {
+	if p := findLocation(list, "Ola"); p == nil || p.NeedsHelp {
 		t.Fatalf("po odwołaniu: %+v", list)
 	}
+
+	// Osoba, która nie udostępnia pozycji, widzi tylko wezwania pomocy – nie zwykłe pozycje.
+	if code, _ = callAs(t, ola, "POST", tripURL+"/checkins", map[string]any{
+		"client_id": "h2", "lat": 49.41, "lon": 20.41, "needs_help": true,
+	}); code != 201 {
+		t.Fatalf("drugie wezwanie: %d", code)
+	}
+	callAs(t, ola, "DELETE", tripURL+"/location", nil)
+	_, body = call(t, "GET", tripURL+"/locations", nil) // organizator udostępnia pozycję
+	decodeInto(t, body, &list)
+	if findLocation(list, "Ola") == nil || findLocation(list, "tester") == nil {
+		t.Fatalf("organizator powinien widzieć Olę (pomoc) i siebie: %+v", list)
+	}
+	// Wezwanie pomocy widzą tylko uczestnicy tego spływu: członek innego spływu dostaje 403 i nie widzi go
+	// ani na liście pozycji, ani w szczegółach.
+	other := authToken(t, ts.URL, "Inny")
+	_, body = call(t, "POST", ts.URL+"/api/trips", map[string]any{"title": "Inny spływ", "start_date": futureDate()})
+	var otherTrip Trip
+	decodeInto(t, body, &otherTrip)
+	if code, _ := callAs(t, other, "POST", ts.URL+"/api/trips/"+itoa(otherTrip.ID)+"/participants", map[string]any{"car_seats": 0, "needs_kayak": false}); code != 201 {
+		t.Fatalf("Inny nie dołączył do swojego spływu: %d", code)
+	}
+	if code, _ := callAs(t, other, "GET", tripURL+"/locations", nil); code != 403 {
+		t.Errorf("obcy widzi pozycje/pomoc: %d", code)
+	}
+	if code, _ := callAs(t, other, "GET", tripURL, nil); code != 403 {
+		t.Errorf("obcy widzi szczegóły spływu z wezwaniem: %d", code)
+	}
+	_, body = callAs(t, other, "GET", ts.URL+"/api/trips/"+itoa(otherTrip.ID)+"/locations", nil)
+	decodeInto(t, body, &list)
+	if findLocation(list, "Ola") != nil {
+		t.Errorf("wezwanie pomocy wyciekło do innego spływu: %+v", list)
+	}
+
+	callAs(t, ola, "PUT", tripURL+"/location", put)
+	_, body = callAs(t, ola, "GET", tripURL+"/locations", nil)
+	decodeInto(t, body, &list)
+	if findLocation(list, "tester") == nil {
+		t.Fatalf("Ola udostępnia pozycję, więc widzi organizatora: %+v", list)
+	}
+}
+
+func findLocation(list []LocationView, name string) *LocationView {
+	for i := range list {
+		if list[i].Username == name {
+			return &list[i]
+		}
+	}
+	return nil
 }

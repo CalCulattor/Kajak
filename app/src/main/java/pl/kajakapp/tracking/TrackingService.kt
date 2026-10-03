@@ -29,6 +29,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import pl.kajakapp.KajakApp
 import pl.kajakapp.MainActivity
 import pl.kajakapp.data.TrackRecorder
@@ -262,9 +263,14 @@ class TrackingService : Service() {
 
     /** Kończy nasłuch, dopisuje odczyty czekające w kolejce, zapisuje trasę i zatrzymuje usługę. */
     private suspend fun stopRecording(startId: Int) {
+        val sharedTripId = recorder.live.value?.tripId
         try {
             shutdownListening(join = true) // dopisz odczyty, które już czekają w kolejce
             recorder.finish()
+            // Koniec trasy = koniec udostępniania pozycji uczestnikom spływu.
+            if (sharedTripId != null) {
+                withTimeoutOrNull(3_000L) { (application as KajakApp).container.sync.clearLocation(sharedTripId) }
+            }
         } finally {
             stopSelfSafely(startId)
         }

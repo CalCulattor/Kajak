@@ -268,6 +268,9 @@ interface KajakServerApi {
     @PUT("api/trips/{id}/location")
     suspend fun putLocation(@Path("id") tripId: Long, @Body body: LocationRequest): Response<Unit>
 
+    @DELETE("api/trips/{id}/location")
+    suspend fun deleteLocation(@Path("id") tripId: Long): Response<Unit>
+
     @GET("api/trips/{id}/locations")
     suspend fun locations(@Path("id") tripId: Long): List<LocationDto>
 
