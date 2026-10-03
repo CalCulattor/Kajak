@@ -145,7 +145,20 @@ fun KajakMap(
                     }
                 }
             },
-            update = { view -> if (state.styleReady) applyAll(view, state) },
+            // Lambda świadomie używa bieżących parametrów: dzięki temu Compose tworzy ją od nowa przy każdej
+            // zmianie (ślad, uczestnicy, cel kamery) i wywołuje aktualizację widoku. Sam obiekt stanu się nie zmienia,
+            // więc bez tego lambda mogłaby zostać pominięta i punkty ani „Pokaż na mapie” nie działałyby.
+            update = { view ->
+                state.path = path
+                state.followUser = followUser
+                state.fitPath = fitPath
+                state.showEnds = showEnds
+                state.recenterKey = recenterKey
+                state.people = people
+                state.focus = focus
+                state.focusKey = focusKey
+                if (state.styleReady) applyAll(view, state)
+            },
             onRelease = { state.view = null }
         )
     }
@@ -287,9 +300,10 @@ private fun applyFocus(view: MapView, state: MapState) {
     // Własny ruch kamery zastępuje śledzenie użytkownika; „Pokaż moją pozycję” przywraca je.
     view.viewport.idle()
     state.detached = true
-    view.mapboxMap.setCamera(
-        CameraOptions.Builder().center(Point.fromLngLat(target.lon, target.lat)).zoom(16.0).build()
-    )
+    val camera = CameraOptions.Builder().center(Point.fromLngLat(target.lon, target.lat)).zoom(16.0).build()
+    view.mapboxMap.setCamera(camera)
+    // Dane osób mogły dojść razem z celem kamery – rysujemy je od razu, by czerwony punkt był widoczny.
+    applyPeople(view, state)
 }
 
 private fun pointFeatures(p: PathPoint?): FeatureCollection =
