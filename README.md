@@ -34,6 +34,11 @@ pogoda z oceną ryzyka, przeszkody zgłaszane przez społeczność oraz organiza
   trzeba zweryfikować. Wodowskaz ustawia się w aplikacji (nazwa stacji jak w danych IMGW).
 - Ekranu logowania i kont użytkowników.
 
+## Serwer (opcjonalny)
+
+W folderze `server/` jest serwer REST w Go na `localhost` z osobnymi polami host i port.
+Aplikacja jeszcze się z nim nie łączy. Uruchomienie i opis API: `server/README.md`.
+
 ## Struktura
 
 ```

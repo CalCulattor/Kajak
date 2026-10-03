@@ -1,0 +1,4 @@
+data.json
+.data-*.tmp
+kajakapp-server
+*.exe
