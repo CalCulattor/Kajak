@@ -101,6 +101,6 @@ Konfiguracja:
 1. Utwórz `local.properties` w katalogu głównym projektu (jest w `.gitignore`) i dodaj token **publiczny** (`pk.…`):
    `MAPBOX_ACCESS_TOKEN=pk.xxxxx` (wzór: `local.properties.example`). Android Studio dopisze tam też `sdk.dir`.
 2. Zbuduj aplikację. Token trafia do zasobu `mapbox_access_token` przez `resValue`, więc nie ma go w kodzie ani w repozytorium.
-3. Repozytorium SDK jest dodane w `settings.gradle.kts`. Gdyby synchronizacja Gradle zwróciła 401, dopisz do niego dane logowania (`username = "mapbox"`, hasło = token tajny `sk.…` z uprawnieniem `DOWNLOADS:READ`, trzymany w `~/.gradle/gradle.properties`, nigdy w repozytorium).
+3. Repozytorium SDK jest dodane w `settings.gradle.kts`. Gdyby synchronizacja Gradle zwróciła 401, dodaj w `~/.gradle/gradle.properties` (Windows: `C:\Users\<ty>\.gradle\gradle.properties`, poza projektem) linię `MAPBOX_DOWNLOADS_TOKEN=sk.…` – token tajny z uprawnieniem `DOWNLOADS:READ`; `settings.gradle.kts` użyje go automatycznie. Nigdy nie wpisuj go do repozytorium.
 
 Wersja SDK jest w `gradle/libs.versions.toml` (`mapbox`). Bez tokenu mapa wyświetla komunikat zamiast kafelków.
