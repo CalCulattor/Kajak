@@ -1,0 +1,479 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
+package pl.kajakapp.ui
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
+import pl.kajakapp.data.db.CheckInEntity
+import pl.kajakapp.data.db.GearItemEntity
+import pl.kajakapp.data.db.ParticipantEntity
+import pl.kajakapp.util.Fmt
+import pl.kajakapp.util.openInMaps
+
+private val TAB_TITLES = listOf("Uczestnicy", "Wyposażenie", "Pozycje")
+
+/** Po ilu minutach pozycja GPS jest oznaczana jako „stara” przy zameldowaniu. */
+private const val OLD_FIX_MINUTES = 5L
+
+@Composable
+fun TripDetailScreen(tripId: Long, onBack: () -> Unit) {
+    val container = rememberContainer()
+    val vm: TripDetailViewModel = viewModel(
+        key = "trip_$tripId",
+        factory = VmFactory { TripDetailViewModel(tripId, container.trips, container.rivers) }
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    Scaffold(
+        contentWindowInsets = NoInsets,
+        topBar = {
+            TopAppBar(
+                windowInsets = NoInsets,
+                title = { Text(state.trip?.title ?: "Spływ", maxLines = 1) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Wstecz")
+                    }
+                },
+                actions = {
+                    if (state.trip != null) {
+                        IconButton(onClick = { confirmDelete = true }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Usuń spływ")
+                        }
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        val trip = state.trip
+        when {
+            !state.loaded -> Box(Modifier.fillMaxSize().padding(padding), Alignment.Center) {
+                CircularProgressIndicator()
+            }
+            trip == null -> Box(Modifier.fillMaxSize().padding(padding), Alignment.Center) {
+                Text("Nie znaleziono spływu.")
+            }
+            else -> Column(Modifier.fillMaxSize().padding(padding)) {
+                TripSummary(
+                    date = Fmt.utcDate(trip.startDateUtcMillis),
+                    overnight = trip.overnight,
+                    sectionLabel = state.sectionLabel,
+                    participants = state.participants
+                )
+                TabRow(selectedTabIndex = tab) {
+                    TAB_TITLES.forEachIndexed { index, title ->
+                        Tab(selected = tab == index, onClick = { tab = index }, text = { Text(title) })
+                    }
+                }
+                when (tab) {
+                    0 -> ParticipantsTab(
+                        participants = state.participants,
+                        onAdd = vm::addParticipant,
+                        onRemove = vm::removeParticipant
+                    )
+                    1 -> GearTab(
+                        gear = state.gear,
+                        participants = state.participants,
+                        onAdd = vm::addGear,
+                        onAddSuggested = vm::addSuggestedGear,
+                        onPacked = vm::setGearPacked,
+                        onAssign = vm::assignGear,
+                        onRemove = vm::removeGear
+                    )
+                    else -> CheckInsTab(
+                        defaultName = trip.organizer,
+                        participants = state.participants,
+                        checkIns = state.checkIns,
+                        onCheckIn = vm::checkIn
+                    )
+                }
+            }
+        }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Usunąć spływ?") },
+            text = { Text("Zostaną usunięci uczestnicy, lista wyposażenia i zameldowania tego spływu.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = false
+                    vm.deleteTrip(onDeleted = onBack)
+                }) { Text("Usuń") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Anuluj") } }
+        )
+    }
+}
+
+@Composable
+private fun TripSummary(
+    date: String,
+    overnight: Boolean,
+    sectionLabel: String?,
+    participants: List<ParticipantEntity>
+) {
+    val seats = participants.sumOf { it.carSeats }
+    val people = participants.size
+    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(date + if (overnight) " · z noclegiem" else " · jednodniowy", fontWeight = FontWeight.Medium)
+        sectionLabel?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        val transport = when {
+            seats == 0 -> "Transport: nikt jeszcze nie zgłosił auta."
+            seats < people -> "Transport: $seats miejsc w autach dla $people osób – brakuje ${people - seats}."
+            else -> "Transport: $seats miejsc w autach dla $people osób."
+        }
+        Text(
+            transport,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (seats < people) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+        )
+        val needKayaks = participants.count { it.needsKayak }
+        if (needKayaks > 0) {
+            Text("Potrzebne kajaki do wypożyczenia: $needKayaks", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
+private fun ParticipantsTab(
+    participants: List<ParticipantEntity>,
+    onAdd: (name: String, carSeats: Int, needsKayak: Boolean) -> Unit,
+    onRemove: (Long) -> Unit
+) {
+    var showDialog by remember { mutableStateOf(false) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        item { OutlinedButton(onClick = { showDialog = true }) { Text("Dodaj uczestnika") } }
+        items(participants, key = { it.id }) { p ->
+            Card(Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(p.name, fontWeight = FontWeight.Bold)
+                        val details = buildList {
+                            if (p.carSeats > 0) add("auto: ${p.carSeats} miejsc")
+                            if (p.needsKayak) add("potrzebuje kajaka")
+                        }
+                        if (details.isNotEmpty()) {
+                            Text(details.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    IconButton(onClick = { onRemove(p.id) }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Usuń uczestnika ${p.name}")
+                    }
+                }
+            }
+        }
+    }
+
+    if (showDialog) {
+        var name by remember { mutableStateOf("") }
+        var seats by remember { mutableStateOf("") }
+        var needsKayak by remember { mutableStateOf(false) }
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text("Nowy uczestnik") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Imię") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = seats,
+                        onValueChange = { seats = it.filter(Char::isDigit).take(2) },
+                        label = { Text("Miejsca w aucie (z kierowcą, 0 = brak auta)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Switch(checked = needsKayak, onCheckedChange = { needsKayak = it })
+                        Text("  Potrzebuje kajaka")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = name.isNotBlank(),
+                    onClick = {
+                        onAdd(name, seats.toIntOrNull() ?: 0, needsKayak)
+                        showDialog = false
+                    }
+                ) { Text("Dodaj") }
+            },
+            dismissButton = { TextButton(onClick = { showDialog = false }) { Text("Anuluj") } }
+        )
+    }
+}
+
+@Composable
+private fun GearTab(
+    gear: List<GearItemEntity>,
+    participants: List<ParticipantEntity>,
+    onAdd: (String) -> Unit,
+    onAddSuggested: () -> Unit,
+    onPacked: (Long, Boolean) -> Unit,
+    onAssign: (Long, String?) -> Unit,
+    onRemove: (Long) -> Unit
+) {
+    var showDialog by remember { mutableStateOf(false) }
+    val unassigned = "Nikt"
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { showDialog = true }) { Text("Dodaj pozycję") }
+                OutlinedButton(onClick = onAddSuggested) { Text("Dodaj propozycje") }
+            }
+        }
+        if (gear.isEmpty()) {
+            item { Text("Lista jest pusta. „Dodaj propozycje” wstawi podstawowy zestaw (z biwakowym, jeśli jest nocleg).") }
+        }
+        items(gear, key = { it.id }) { g ->
+            Card(Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier.padding(start = 8.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(checked = g.packed, onCheckedChange = { onPacked(g.id, it) })
+                    Column(Modifier.weight(1f)) {
+                        Text(g.name, fontWeight = FontWeight.Medium)
+                        ChoiceButton(
+                            selectedLabel = "Bierze: ${g.assignedTo ?: unassigned}",
+                            options = listOf<String?>(null) + participants.map { it.name },
+                            optionLabel = { it ?: unassigned },
+                            onSelected = { onAssign(g.id, it) }
+                        )
+                    }
+                    IconButton(onClick = { onRemove(g.id) }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Usuń ${g.name}")
+                    }
+                }
+            }
+        }
+    }
+
+    if (showDialog) {
+        var name by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text("Nowa pozycja") },
+            text = {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Nazwa (np. namiot 3-os.)") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = name.isNotBlank(),
+                    onClick = {
+                        onAdd(name)
+                        showDialog = false
+                    }
+                ) { Text("Dodaj") }
+            },
+            dismissButton = { TextButton(onClick = { showDialog = false }) { Text("Anuluj") } }
+        )
+    }
+}
+
+@Composable
+private fun CheckInsTab(
+    defaultName: String,
+    participants: List<ParticipantEntity>,
+    checkIns: List<CheckInEntity>,
+    onCheckIn: (name: String, point: pl.kajakapp.util.GeoPoint, needsHelp: Boolean) -> Unit
+) {
+    val context = LocalContext.current
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    var showDialog by remember { mutableStateOf(false) }
+    var locating by remember { mutableStateOf(false) }
+    var pending by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+
+    val requestLocation = rememberLocationRequester { point ->
+        val request = pending
+        pending = null
+        locating = false
+        if (request != null) {
+            if (point != null) {
+                onCheckIn(request.first, point, request.second)
+            } else {
+                scope.launch {
+                    snackbar.showSnackbar(
+                        "Nie udało się ustalić pozycji. Sprawdź uprawnienia i włącz lokalizację."
+                    )
+                }
+            }
+        }
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Zameldowanie zapisuje pozycję GPS na tym telefonie. Udostępnianie jej " +
+                            "reszcie grupy wymaga serwera, którego ta wersja aplikacji jeszcze nie ma.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (locating) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    OutlinedButton(onClick = { showDialog = true }, enabled = !locating) {
+                        Text("Zamelduj mnie / poproś o pomoc")
+                    }
+                }
+            }
+            if (checkIns.isEmpty()) {
+                item { Text("Brak zameldowań.") }
+            }
+            items(checkIns, key = { it.id }) { c ->
+                val colors = if (c.needsHelp) {
+                    CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                } else {
+                    CardDefaults.cardColors()
+                }
+                Card(Modifier.fillMaxWidth(), colors = colors) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            (if (c.needsHelp) "POTRZEBUJE POMOCY: " else "") + c.personName,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "Zameldowano ${Fmt.dateTime(c.createdAt)}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        val fixAgeMinutes = (c.createdAt - c.fixAt) / 60_000L
+                        if (fixAgeMinutes >= OLD_FIX_MINUTES) {
+                            Text(
+                                "Uwaga: pozycja GPS sprzed ${Fmt.ageText(c.fixAt, c.createdAt).removeSuffix(" temu")}.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        TextButton(onClick = { openInMaps(context, c.lat, c.lon, c.personName) }) {
+                            Text("Pokaż na mapie")
+                        }
+                    }
+                }
+            }
+        }
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+    }
+
+    if (showDialog) {
+        var name by remember { mutableStateOf(defaultName) }
+        var needsHelp by remember { mutableStateOf(false) }
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text("Zameldowanie") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ChoiceButton(
+                        selectedLabel = "Wybierz osobę",
+                        options = participants.map { it.name },
+                        optionLabel = { it },
+                        onSelected = { name = it }
+                    )
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Kto się melduje") },
+                        singleLine = true
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Switch(checked = needsHelp, onCheckedChange = { needsHelp = it })
+                        Text("  Potrzebuję pomocy")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = name.isNotBlank(),
+                    onClick = {
+                        showDialog = false
+                        pending = name to needsHelp
+                        locating = true
+                        requestLocation()
+                    }
+                ) { Text("Zamelduj") }
+            },
+            dismissButton = { TextButton(onClick = { showDialog = false }) { Text("Anuluj") } }
+        )
+    }
+}
