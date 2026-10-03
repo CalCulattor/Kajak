@@ -1,16 +1,25 @@
 package pl.kajakapp.ui
 
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import pl.kajakapp.util.Fmt
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -24,6 +33,9 @@ import androidx.navigation.navArgument
 private object Routes {
     const val RIVERS = "rivers"
     const val TRIPS = "trips"
+    const val HISTORY = "history"
+    const val RECORDING = "recording"
+    const val TRACK = "track/{id}"
     const val SECTION = "section/{id}"
     const val TRIP = "trip/{id}"
     const val ADD_ROUTE = "route/new"
@@ -33,6 +45,7 @@ private object Routes {
 
     fun section(id: Long) = "section/$id"
     fun trip(id: Long) = "trip/$id"
+    fun track(id: Long) = "track/$id"
 }
 
 private fun NavController.switchTab(route: String) {
@@ -48,11 +61,26 @@ fun KajakAppRoot() {
     val nav = rememberNavController()
     val backStackEntry by nav.currentBackStackEntryAsState()
     val route = backStackEntry?.destination?.route
-    val showBottomBar = route == Routes.RIVERS || route == Routes.TRIPS
+    val showBottomBar = route == Routes.RIVERS || route == Routes.TRIPS || route == Routes.HISTORY
+    val container = rememberContainer()
+    val recording by container.recorder.live.collectAsStateWithLifecycle()
 
     Scaffold(
         bottomBar = {
-            if (showBottomBar) {
+            if (showBottomBar) Column {
+                // Pasek przypominający o trwającym nagrywaniu (widoczny na wszystkich zakładkach).
+                recording?.let { live ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        modifier = Modifier.fillMaxWidth().clickable { nav.navigate(Routes.RECORDING) { launchSingleTop = true } }
+                    ) {
+                        Text(
+                            "● Nagrywanie trasy · ${Fmt.distance(live.distanceM)} · ${Fmt.speed(live.speedKmh)} – otwórz",
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
                 NavigationBar {
                     NavigationBarItem(
                         selected = route == Routes.RIVERS,
@@ -65,6 +93,12 @@ fun KajakAppRoot() {
                         onClick = { nav.switchTab(Routes.TRIPS) },
                         icon = { Icon(Icons.Default.Person, contentDescription = null) },
                         label = { Text("Spływy") }
+                    )
+                    NavigationBarItem(
+                        selected = route == Routes.HISTORY,
+                        onClick = { nav.switchTab(Routes.HISTORY) },
+                        icon = { Icon(Icons.Default.DateRange, contentDescription = null) },
+                        label = { Text("Historia") }
                     )
                 }
             }
@@ -86,6 +120,31 @@ fun KajakAppRoot() {
                 TripsScreen(
                     onOpenTrip = { nav.navigate(Routes.trip(it)) },
                     onOpenSettings = { nav.navigate(Routes.SETTINGS) }
+                )
+            }
+            composable(Routes.HISTORY) {
+                HistoryScreen(
+                    onOpenTrack = { nav.navigate(Routes.track(it)) },
+                    onOpenRecording = { nav.navigate(Routes.RECORDING) { launchSingleTop = true } },
+                    onOpenSettings = { nav.navigate(Routes.SETTINGS) }
+                )
+            }
+            composable(Routes.RECORDING) {
+                RecordingScreen(
+                    onBack = { nav.popBackStack() },
+                    onFinished = { trackId ->
+                        nav.popBackStack()
+                        if (trackId != null) nav.navigate(Routes.track(trackId))
+                    }
+                )
+            }
+            composable(
+                route = Routes.TRACK,
+                arguments = listOf(navArgument(Routes.ARG_ID) { type = NavType.LongType })
+            ) { entry ->
+                TrackDetailScreen(
+                    trackId = entry.arguments?.getLong(Routes.ARG_ID) ?: 0L,
+                    onBack = { nav.popBackStack() }
                 )
             }
             composable(Routes.ADD_ROUTE) {
