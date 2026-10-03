@@ -6,6 +6,13 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+// Token publiczny Mapbox (pk.…) czytamy z local.properties, który nie trafia do gita:
+//   MAPBOX_ACCESS_TOKEN=pk.xxxxx
+val localProps = java.util.Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
 android {
     namespace = "pl.kajakapp"
     compileSdk = 35
@@ -16,6 +23,8 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+
+        resValue("string", "mapbox_access_token", localProps.getProperty("MAPBOX_ACCESS_TOKEN", ""))
     }
 
     buildTypes {
@@ -35,6 +44,7 @@ android {
 
     buildFeatures {
         compose = true
+        resValues = true
     }
 }
 
@@ -49,6 +59,8 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons.core)
+
+    implementation(libs.mapbox.maps)
 
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)

@@ -91,4 +91,16 @@ util/     lokalizacja, formatowanie
 
 ## Interfejs
 
-Dolny pasek ma cztery zakładki w kolejności: **Start** (rozpoczęcie trasy, ostatnia trasa, sumy), **Historia** (same trasy, pogrupowane miesiącami), **Spływy**, **Rzeki**. Motyw (`ui/Theme.kt`) jest jasny i ciemny, ma chłodne, wodne tło, granatowy kolor główny i jeden zielony akcent używany tylko do startu i nagrywania. Przycisk Start ma kolor główny (niebieski), aktywna zakładka dolnego paska ma niebieskie podświetlenie, a pod górnym paskiem każdego ekranu jest delikatna kreska. Karty są płaskie, cyfry tabelaryczne, elementy dotykowe duże (czytelność w słońcu).
+Dolny pasek ma cztery zakładki w kolejności: **Start** (mapa, przycisk rozpoczęcia trasy, a w trakcie nagrywania statystyki na żywo i „Zakończ”), **Historia** (statystyki ogólne i trasy pogrupowane miesiącami), **Spływy**, **Rzeki**. Motyw (`ui/Theme.kt`) jest jasny i ciemny, ma chłodne, wodne tło, granatowy kolor główny i jeden zielony akcent używany tylko do startu i nagrywania. Przycisk Start ma kolor główny (niebieski), aktywna zakładka dolnego paska ma niebieskie podświetlenie, a pod górnym paskiem każdego ekranu jest delikatna kreska. Karty są płaskie, cyfry tabelaryczne, elementy dotykowe duże (czytelność w słońcu).
+
+## Mapy (Mapbox)
+
+Ekran Start pokazuje mapę Mapbox na całą stronę (pozycja użytkownika i ślad nagrywanej trasy), a szczegóły trasy w Historii rysują jej przebieg na mapie.
+
+Konfiguracja:
+1. Utwórz `local.properties` w katalogu głównym projektu (jest w `.gitignore`) i dodaj token **publiczny** (`pk.…`):
+   `MAPBOX_ACCESS_TOKEN=pk.xxxxx` (wzór: `local.properties.example`). Android Studio dopisze tam też `sdk.dir`.
+2. Zbuduj aplikację. Token trafia do zasobu `mapbox_access_token` przez `resValue`, więc nie ma go w kodzie ani w repozytorium.
+3. Repozytorium SDK jest dodane w `settings.gradle.kts`. Gdyby synchronizacja Gradle zwróciła 401, dopisz do niego dane logowania (`username = "mapbox"`, hasło = token tajny `sk.…` z uprawnieniem `DOWNLOADS:READ`, trzymany w `~/.gradle/gradle.properties`, nigdy w repozytorium).
+
+Wersja SDK jest w `gradle/libs.versions.toml` (`mapbox`). Bez tokenu mapa wyświetla komunikat zamiast kafelków.

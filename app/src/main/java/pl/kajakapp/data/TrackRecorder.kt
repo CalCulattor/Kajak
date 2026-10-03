@@ -8,6 +8,7 @@ import kotlinx.coroutines.sync.withLock
 import pl.kajakapp.data.db.TrackDao
 import pl.kajakapp.data.db.TrackEntity
 import pl.kajakapp.data.db.TrackPointEntity
+import pl.kajakapp.domain.PathPoint
 import pl.kajakapp.domain.TrackAccumulator
 import pl.kajakapp.domain.TrackPoint
 
@@ -54,6 +55,12 @@ class TrackRecorder(
 
     private val _live = MutableStateFlow<LiveTrack?>(null)
     val live: StateFlow<LiveTrack?> = _live
+
+    private val path = ArrayList<PathPoint>()
+    private val _livePath = MutableStateFlow<List<PathPoint>>(emptyList())
+
+    /** Dotychczasowy ślad trasy w toku (do rysowania na mapie); puste, gdy nic nie jest nagrywane. */
+    val livePath: StateFlow<List<PathPoint>> = _livePath
 
     private val _lastResult = MutableStateFlow<FinishResult?>(null)
 
@@ -109,7 +116,10 @@ class TrackRecorder(
 
     private suspend fun resumeLocked(t: TrackEntity): Long {
         reset(t.id, t.title, t.startedAt)
-        for (p in dao.pointsOf(t.id)) acc.add(TrackPoint(p.time, p.lat, p.lon, p.accuracy))
+        for (p in dao.pointsOf(t.id)) {
+            if (acc.add(TrackPoint(p.time, p.lat, p.lon, p.accuracy))) appendPath(p.lat, p.lon)
+        }
+        _livePath.value = ArrayList(path)
         maxLiveSpeed = if (acc.distanceM > 0) acc.summary().maxSpeedKmh else 0.0
         publish(acc.lastFixAt ?: clock())
         return t.id
@@ -118,6 +128,8 @@ class TrackRecorder(
     private fun reset(id: Long, title: String, startedAt: Long) {
         acc = TrackAccumulator()
         trackId = id
+        path.clear()
+        _livePath.value = emptyList()
         this.title = title
         this.startedAt = startedAt
         lastAccuracy = null
@@ -131,12 +143,25 @@ class TrackRecorder(
     suspend fun onFix(p: TrackPoint): Boolean = mutex.withLock {
         val id = trackId ?: return@withLock false
         dao.insertPoint(TrackPointEntity(trackId = id, time = p.time, lat = p.lat, lon = p.lon, accuracy = p.accuracy))
-        acc.add(p)
+        // Na mapie rysujemy tylko odczyty, które przyjął też algorytm trasy (bez skoków i słabych fixów).
+        if (acc.add(p) && appendPath(p.lat, p.lon)) _livePath.value = ArrayList(path)
         lastAccuracy = p.accuracy
         val speed = acc.currentSpeedMs(p.time) * 3.6
         if (speed > maxLiveSpeed) maxLiveSpeed = speed
         publish(p.time)
         true
+    }
+
+    /** Dopisuje punkt do śladu na mapie, pomijając punkty bliższe niż kilka metrów od poprzedniego. */
+    private fun appendPath(lat: Double, lon: Double): Boolean {
+        val last = path.lastOrNull()
+        if (last != null) {
+            val dLat = (lat - last.lat) * 111_320.0
+            val dLon = (lon - last.lon) * 111_320.0 * Math.cos(Math.toRadians(lat))
+            if (dLat * dLat + dLon * dLon < MAP_MIN_STEP_M * MAP_MIN_STEP_M) return false
+        }
+        path.add(PathPoint(lat, lon))
+        return true
     }
 
     fun setGpsEnabled(enabled: Boolean) {
@@ -199,6 +224,8 @@ class TrackRecorder(
         val result = saved.copy(seq = ++resultSeq)
         trackId = null
         acc = TrackAccumulator()
+        path.clear()
+        _livePath.value = emptyList()
         _live.value = null
         _lastResult.value = result
         return result
@@ -206,5 +233,6 @@ class TrackRecorder(
 
     companion object {
         const val MIN_SAVE_DISTANCE_M = 30.0
+        private const val MAP_MIN_STEP_M = 3.0
     }
 }
