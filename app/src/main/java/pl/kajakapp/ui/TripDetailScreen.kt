@@ -115,10 +115,10 @@ fun TripDetailScreen(tripId: Long, onBack: () -> Unit) {
                             IconButton(onClick = { confirmDelete = true }) {
                                 Icon(
                                     Icons.Default.Delete,
-                                    contentDescription = if (state.trip?.serverId != null && !state.isOwner) {
-                                        "Opuść spływ"
-                                    } else {
-                                        "Usuń spływ"
+                                    contentDescription = when {
+                                        state.trip?.serverId == null -> "Usuń spływ"
+                                        state.isOrganizer -> "Usuń lub opuść spływ"
+                                        else -> "Opuść spływ"
                                     }
                                 )
                             }
@@ -155,7 +155,8 @@ fun TripDetailScreen(tripId: Long, onBack: () -> Unit) {
                         participants = state.participants,
                         shared = trip.serverId != null,
                         currentUser = state.currentUser,
-                        organizer = trip.ownerUsername ?: trip.organizer,
+                        isOrganizer = state.isOrganizer,
+                        onMakeOrganizer = vm::makeOrganizer,
                         onAdd = vm::addParticipant,
                         onUpdateMine = vm::updateMyData,
                         onRemove = vm::removeParticipant
@@ -188,37 +189,49 @@ fun TripDetailScreen(tripId: Long, onBack: () -> Unit) {
 
     if (confirmDelete) {
         val sharedTrip = state.trip?.serverId != null
-        val leaving = sharedTrip && !state.isOwner
+        val organizer = state.isOrganizer
+        // Zwykły uczestnik może tylko opuścić spływ (na serwerze). Organizator może go usunąć dla wszystkich,
+        // a opuścić tylko wtedy, gdy zostaje inny organizator.
+        val canLeave = sharedTrip && (!organizer || state.hasOtherOrganizer)
+        val canDelete = !sharedTrip || organizer
+        val soleOrganizer = sharedTrip && organizer && !state.hasOtherOrganizer && state.participants.size > 1
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
-            title = { Text(if (leaving) "Opuścić spływ?" else "Usunąć spływ?") },
+            title = { Text(if (canDelete) "Usunąć spływ?" else "Opuścić spływ?") },
             text = {
                 Text(
                     when {
-                        leaving ->
+                        !sharedTrip ->
+                            "Zostaną usunięci uczestnicy, lista wyposażenia i zameldowania tego spływu."
+                        !organizer ->
                             "Przestaniesz być uczestnikiem tego spływu, a on zniknie z Twojej listy. " +
                                 "Pozostali uczestnicy nadal go widzą. Wymaga połączenia z serwerem."
-                        sharedTrip ->
-                            "Jako organizator usuniesz spływ dla WSZYSTKICH uczestników (razem z listą " +
-                                "wyposażenia i zameldowaniami). Wymaga połączenia z serwerem."
+                        state.hasOtherOrganizer ->
+                            "Możesz usunąć spływ dla WSZYSTKICH uczestników albo go opuścić – wtedy spływ " +
+                                "zostaje z pozostałymi organizatorami. Wymaga połączenia z serwerem."
+                        soleOrganizer ->
+                            "Jesteś jedynym organizatorem, więc możesz tylko usunąć spływ dla WSZYSTKICH " +
+                                "uczestników. Żeby go opuścić, najpierw mianuj kolejnego organizatora " +
+                                "(zakładka Uczestnicy). Wymaga połączenia z serwerem."
                         else ->
-                            "Zostaną usunięci uczestnicy, lista wyposażenia i zameldowania tego spływu."
+                            "Usuniesz spływ razem z listą wyposażenia i zameldowaniami. " +
+                                "Wymaga połączenia z serwerem."
                     }
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    confirmDelete = false
-                    vm.deleteTrip(onDeleted = onBack)
-                }) { Text(if (leaving) "Opuść" else "Usuń") }
-            },
-            dismissButton = {
-                Row {
-                    if (sharedTrip) {
+                Column(horizontalAlignment = Alignment.End) {
+                    if (canLeave) {
                         TextButton(onClick = {
                             confirmDelete = false
-                            vm.deleteTripLocalOnly(onDeleted = onBack)
-                        }) { Text("Tylko z telefonu") }
+                            vm.deleteTrip(leaveOnly = true, onDeleted = onBack)
+                        }) { Text("Opuść spływ") }
+                    }
+                    if (canDelete) {
+                        TextButton(onClick = {
+                            confirmDelete = false
+                            vm.deleteTrip(leaveOnly = false, onDeleted = onBack)
+                        }) { Text(if (sharedTrip) "Usuń dla wszystkich" else "Usuń") }
                     }
                     TextButton(onClick = { confirmDelete = false }) { Text("Anuluj") }
                 }
@@ -242,7 +255,7 @@ private fun TripSummary(
         sectionLabel?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         Text(
             if (shared) {
-                "Udostępniony na serwerze – zmiany innych osób pobierzesz przyciskiem synchronizacji."
+                "Udostępniony na serwerze – zmiany innych osób pojawiają się na bieżąco."
             } else {
                 "Tylko na tym telefonie – przycisk udostępniania wyśle spływ na serwer, aby dołączyła ekipa."
             },
@@ -270,7 +283,8 @@ private fun ParticipantsTab(
     participants: List<ParticipantEntity>,
     shared: Boolean,
     currentUser: String?,
-    organizer: String,
+    isOrganizer: Boolean,
+    onMakeOrganizer: (Long) -> Unit,
     onAdd: (name: String, carSeats: Int, needsKayak: Boolean) -> Unit,
     onUpdateMine: (carSeats: Int, needsKayak: Boolean) -> Unit,
     onRemove: (Long) -> Unit
@@ -299,9 +313,8 @@ private fun ParticipantsTab(
                 }
             }
         }
-        // Organizator zawsze na początku listy.
-        items(participants.sortedByDescending { it.name.equals(organizer, ignoreCase = true) }, key = { it.id }) { p ->
-            val isOrganizer = p.name.equals(organizer, ignoreCase = true)
+        // Organizatorzy zawsze na początku listy.
+        items(participants.sortedByDescending { it.isOrganizer }, key = { it.id }) { p ->
             val isMe = shared && p.name.equals(currentUser, ignoreCase = true)
             val localOnly = shared && p.serverId == null && !isMe
             Card(Modifier.fillMaxWidth()) {
@@ -311,7 +324,7 @@ private fun ParticipantsTab(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(p.name + if (isMe) " (Ty)" else "", fontWeight = FontWeight.Bold)
-                        if (isOrganizer) {
+                        if (p.isOrganizer) {
                             Text(
                                 "Organizator",
                                 style = MaterialTheme.typography.labelMedium,
@@ -327,6 +340,9 @@ private fun ParticipantsTab(
                         if (details.isNotEmpty()) {
                             Text(details.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
                         }
+                    }
+                    if (shared && isOrganizer && !p.isOrganizer && p.serverId != null) {
+                        TextButton(onClick = { onMakeOrganizer(p.id) }) { Text("Mianuj organizatorem") }
                     }
                     // W spływie na serwerze usunąć można tylko wpis lokalny; siebie – przez „Opuść spływ”.
                     if (!shared || localOnly) {

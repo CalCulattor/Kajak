@@ -25,7 +25,7 @@ pogoda z oceną ryzyka, przeszkody zgłaszane przez społeczność oraz organiza
 | Zameldowanie / pomoc | zapis pozycji GPS (świeżej, a gdy się nie da – ostatniej znanej, z informacją o jej wieku) i otwarcie w aplikacji map |
 | Dodawanie tras | przycisk **+** na liście rzek; trasa zapisuje się lokalnie i jest wysyłana na serwer |
 | Konta | rejestracja i logowanie nazwą użytkownika i hasłem (bez e-maila, nazwa unikalna), ikona ustawień → „Zaloguj / zarejestruj” |
-| Serwer (synchronizacja) | domyślnie `https://hackyeah.duckdns.org/`, zmiana w ustawieniach (ikona koła zębatego); trasy, przeszkody, spływy, zameldowania |
+| Serwer (synchronizacja) | adres serwera jest stały i nie jest pokazywany w aplikacji; zmienia się go w kodzie (`ServerSettings.DEFAULT_URL`); trasy, przeszkody, spływy, zameldowania |
 
 ## Serwer i synchronizacja
 
@@ -52,6 +52,8 @@ Trasy wymagają serwera z endpointem `/api/routes` (jest w `server/`; starsza we
 i aplikacja pokaże komunikat).
 
 Aktualizacje na żywo: gdy aplikacja jest na ekranie i jesteś zalogowany, trzyma połączenie z serwerem (`GET /api/events`). Kiedy ktoś dołączy do spływu, doda sprzęt, zamelduje się albo zgłosi przeszkodę, Twój telefon sam pobiera zmianę – bez ręcznego odświeżania. Po zerwaniu połączenia aplikacja łączy się ponownie i nadrabia zaległości. Przy spływie widać, kto jest organizatorem.
+
+Organizatorzy: spływ może mieć kilku organizatorów. Organizator mianuje innych uczestników organizatorami (zakładka Uczestnicy → „Mianuj organizatorem”) i może usunąć spływ dla wszystkich. Organizator może opuścić spływ, gdy jest drugi organizator – spływ zostaje. Jedyny organizator nie może wyjść (najpierw mianuje następcę albo usuwa spływ). Zwykły uczestnik może spływ tylko opuścić na serwerze (nie da się go usunąć wyłącznie lokalnie). Terminu spływu nie można ustawić w przeszłości.
 
 ## Czego jeszcze nie ma (świadomie)
 

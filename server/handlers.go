@@ -69,6 +69,7 @@ func (srv *Server) Handler() http.Handler {
 
 	mux.HandleFunc("POST /api/trips/{id}/participants", srv.createParticipant)
 	mux.HandleFunc("DELETE /api/trips/{id}/participants/{pid}", srv.deleteParticipant)
+	mux.HandleFunc("POST /api/trips/{id}/participants/{pid}/organizer", srv.promoteParticipant)
 
 	mux.HandleFunc("POST /api/trips/{id}/gear", srv.createGear)
 	mux.HandleFunc("PATCH /api/trips/{id}/gear/{gid}", srv.patchGear)
@@ -103,7 +104,11 @@ func storeError(w http.ResponseWriter, err error) {
 		return
 	}
 	if errors.Is(err, errOwnerLeft) {
-		writeError(w, http.StatusForbidden, "organizator nie może opuścić spływu – może go tylko usunąć")
+		writeError(w, http.StatusForbidden, "jesteś jedynym organizatorem – mianuj kolejnego organizatora albo usuń spływ")
+		return
+	}
+	if errors.Is(err, errNotOrganizer) {
+		writeError(w, http.StatusForbidden, "tylko organizator może to zrobić")
 		return
 	}
 	if errors.Is(err, errForbidden) {
@@ -406,6 +411,9 @@ func (srv *Server) listTrips(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, srv.store.ListTrips())
 }
 
+// nowUTC jest podmienialne w testach.
+var nowUTC = func() time.Time { return time.Now().UTC() }
+
 func (srv *Server) createTrip(w http.ResponseWriter, r *http.Request) {
 	user, ok := srv.currentUser(w, r)
 	if !ok {
@@ -429,8 +437,14 @@ func (srv *Server) createTrip(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "start_date musi mieć format RRRR-MM-DD")
 		return
 	}
-	if _, err := time.Parse("2006-01-02", req.StartDate); err != nil {
+	day, err := time.Parse("2006-01-02", req.StartDate)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "start_date nie jest poprawną datą")
+		return
+	}
+	// Dzień tolerancji, żeby różnica stref czasowych nie odrzucała dzisiejszych spływów.
+	if day.Before(nowUTC().AddDate(0, 0, -1).Truncate(24 * time.Hour)) {
+		writeError(w, http.StatusBadRequest, "start_date nie może być z przeszłości")
 		return
 	}
 	if req.SectionKey != nil && !sectionKeyRe.MatchString(*req.SectionKey) {
@@ -451,7 +465,7 @@ func (srv *Server) createTrip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Organizator jest pierwszym uczestnikiem, tak jak w aplikacji.
-	if _, err := srv.store.AddParticipant(t.ID, Participant{Name: user}); err != nil {
+	if _, err := srv.store.AddParticipant(t.ID, Participant{Name: user, IsOrganizer: true}); err != nil {
 		storeError(w, err)
 		return
 	}
@@ -488,8 +502,8 @@ func (srv *Server) deleteTrip(w http.ResponseWriter, r *http.Request) {
 	case !a.Exists:
 		writeError(w, http.StatusNotFound, "nie znaleziono")
 		return
-	case !a.Owner:
-		writeError(w, http.StatusForbidden, "spływ może usunąć tylko jego organizator")
+	case !a.Organizer:
+		writeError(w, http.StatusForbidden, "spływ może usunąć tylko organizator")
 		return
 	}
 	if err := srv.store.DeleteTrip(id); err != nil {
@@ -564,6 +578,30 @@ func (srv *Server) deleteParticipant(w http.ResponseWriter, r *http.Request) {
 	}
 	srv.tripChanged(tripID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// promoteParticipant: organizator mianuje uczestnika (też siebie nie – to już jest organizatorem) organizatorem.
+func (srv *Server) promoteParticipant(w http.ResponseWriter, r *http.Request) {
+	tripID, ok := pathID(w, r, "id")
+	if !ok {
+		return
+	}
+	pid, ok := pathID(w, r, "pid")
+	if !ok {
+		return
+	}
+	user, ok := srv.currentUser(w, r)
+	if !ok {
+		return
+	}
+	p, err := srv.store.PromoteOrganizer(tripID, pid, user)
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	srv.tripChanged(tripID)
+	srv.tripsChanged()
+	writeJSON(w, http.StatusOK, p)
 }
 
 // ---------------------------------------------------------------- wyposażenie

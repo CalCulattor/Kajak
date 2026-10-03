@@ -50,12 +50,60 @@ func OpenStore(path string) (*Store, error) {
 		if st.s.NextID < 1 {
 			st.s.NextID = 1
 		}
+		migrateOrganizers(&st.s)
 	case errors.Is(err, os.ErrNotExist):
 		// nowa, pusta baza
 	default:
 		return nil, fmt.Errorf("nie można odczytać %s: %w", path, err)
 	}
 	return st, nil
+}
+
+// migrateOrganizers oznacza twórców spływów zapisanych przed wprowadzeniem współorganizatorów
+// jako organizatorów (stare dane nie mają pola is_organizer).
+func migrateOrganizers(s *state) {
+	for _, t := range s.Trips {
+		has := false
+		for _, p := range s.Participants {
+			if p.TripID == t.ID && p.IsOrganizer {
+				has = true
+			}
+		}
+		if has {
+			continue
+		}
+		for i := range s.Participants {
+			if s.Participants[i].TripID == t.ID && strings.EqualFold(s.Participants[i].Name, t.Organizer) {
+				s.Participants[i].IsOrganizer = true
+			}
+		}
+	}
+}
+
+// organizersIn zwraca nazwy organizatorów spływu w kolejności dodania.
+func organizersIn(s *state, tripID int64) []string {
+	var names []string
+	for _, p := range s.Participants {
+		if p.TripID == tripID && p.IsOrganizer {
+			names = append(names, p.Name)
+		}
+	}
+	return names
+}
+
+// decorateTrip uzupełnia spływ o listę aktualnych organizatorów. Pole Organizer wskazuje twórcę,
+// dopóki jest organizatorem, a inaczej pierwszego organizatora.
+func decorateTrip(s *state, t Trip) Trip {
+	t.Organizers = organizersIn(s, t.ID)
+	for _, n := range t.Organizers {
+		if strings.EqualFold(n, t.Organizer) {
+			return t
+		}
+	}
+	if len(t.Organizers) > 0 {
+		t.Organizer = t.Organizers[0]
+	}
+	return t
 }
 
 // mutate wykonuje zmianę pod blokadą. Gdy zmiana albo zapis się nie uda,
@@ -241,7 +289,9 @@ func (st *Store) ListTrips() []Trip {
 	st.mu.RLock()
 	defer st.mu.RUnlock()
 	out := make([]Trip, len(st.s.Trips))
-	copy(out, st.s.Trips)
+	for i, t := range st.s.Trips {
+		out[i] = decorateTrip(&st.s, t)
+	}
 	return out
 }
 
@@ -256,7 +306,7 @@ func (st *Store) tripDetailLocked(id int64) (TripDetail, error) {
 	found := false
 	for _, t := range st.s.Trips {
 		if t.ID == id {
-			d.Trip = t
+			d.Trip = decorateTrip(&st.s, t)
 			found = true
 			break
 		}
@@ -335,7 +385,7 @@ func (st *Store) AddParticipant(tripID int64, p Participant) (Participant, error
 // Access opisuje relację użytkownika do spływu.
 type Access struct {
 	Exists        bool
-	Owner         bool
+	Organizer     bool // uczestnik z rolą organizatora
 	Member        bool
 	ParticipantID int64
 }
@@ -345,7 +395,6 @@ func accessIn(s *state, tripID int64, username string) Access {
 	for _, t := range s.Trips {
 		if t.ID == tripID {
 			a.Exists = true
-			a.Owner = strings.EqualFold(t.Organizer, username)
 			break
 		}
 	}
@@ -355,6 +404,7 @@ func accessIn(s *state, tripID int64, username string) Access {
 	for _, p := range s.Participants {
 		if p.TripID == tripID && strings.EqualFold(p.Name, username) {
 			a.Member = true
+			a.Organizer = p.IsOrganizer
 			a.ParticipantID = p.ID
 			break
 		}
@@ -409,12 +459,14 @@ func (st *Store) ParticipantNames(tripID int64) []string {
 }
 
 var (
-	errForbidden = errors.New("brak uprawnień")
-	errOwnerLeft = errors.New("organizator nie może opuścić spływu")
+	errForbidden    = errors.New("brak uprawnień")
+	errNotOrganizer = errors.New("tylko organizator może to zrobić")
+	errOwnerLeft    = errors.New("jedyny organizator nie może opuścić spływu")
 )
 
 // LeaveTrip usuwa uczestnika o danym id, ale tylko jeśli jest nim wskazany użytkownik.
-// Organizator nie może opuścić własnego spływu (może go tylko usunąć).
+// Jedyny organizator nie może odejść (musi najpierw mianować kolejnego albo usunąć spływ);
+// gdy jest drugi organizator, spływ zostaje.
 func (st *Store) LeaveTrip(tripID, participantID int64, username string) error {
 	return st.mutate(func(s *state) error {
 		a := accessIn(s, tripID, username)
@@ -428,7 +480,7 @@ func (st *Store) LeaveTrip(tripID, participantID int64, username string) error {
 			if !strings.EqualFold(p.Name, username) {
 				return errForbidden
 			}
-			if a.Owner {
+			if a.Organizer && len(organizersIn(s, tripID)) < 2 {
 				return errOwnerLeft
 			}
 			s.Participants = append(s.Participants[:i], s.Participants[i+1:]...)
@@ -443,6 +495,29 @@ func (st *Store) LeaveTrip(tripID, participantID int64, username string) error {
 		}
 		return errNotFound
 	})
+}
+
+// PromoteOrganizer nadaje uczestnikowi rolę organizatora. Robić to może tylko organizator;
+// powtórne wywołanie nic nie zmienia.
+func (st *Store) PromoteOrganizer(tripID, participantID int64, actor string) (out Participant, err error) {
+	err = st.mutate(func(s *state) error {
+		a := accessIn(s, tripID, actor)
+		if !a.Exists {
+			return errNotFound
+		}
+		if !a.Organizer {
+			return errNotOrganizer
+		}
+		for i := range s.Participants {
+			if s.Participants[i].ID == participantID && s.Participants[i].TripID == tripID {
+				s.Participants[i].IsOrganizer = true
+				out = s.Participants[i]
+				return nil
+			}
+		}
+		return errNotFound
+	})
+	return
 }
 
 func (st *Store) AddGear(tripID int64, g GearItem) (GearItem, error) {

@@ -141,7 +141,9 @@ class TripRepository(db: AppDatabase) {
         // Organizator jest pierwszym uczestnikiem.
         if (organizer.isNotBlank()) {
             dao.insertParticipant(
-                ParticipantEntity(tripId = tripId, name = organizer.trim(), carSeats = 0, needsKayak = false)
+                ParticipantEntity(
+                    tripId = tripId, name = organizer.trim(), carSeats = 0, needsKayak = false, isOrganizer = true
+                )
             )
         }
         return tripId

@@ -22,6 +22,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -268,7 +269,8 @@ private fun CreateTripDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = title.isNotBlank() && (accountName != null || organizer.isNotBlank()),
+                enabled = title.isNotBlank() && (accountName != null || organizer.isNotBlank()) &&
+                    dateMillis >= Fmt.todayUtcMidnight(),
                 onClick = { onCreate(title, sectionId, dateMillis, overnight, organizer) }
             ) { Text("Utwórz") }
         },
@@ -276,7 +278,18 @@ private fun CreateTripDialog(
     )
 
     if (showDatePicker) {
-        val pickerState = rememberDatePickerState(initialSelectedDateMillis = dateMillis)
+        // Terminu spływu nie można ustawić w przeszłości.
+        val today = remember { Fmt.todayUtcMidnight() }
+        val pickerState = rememberDatePickerState(
+            initialSelectedDateMillis = dateMillis,
+            selectableDates = remember {
+                object : SelectableDates {
+                    override fun isSelectableDate(utcTimeMillis: Long): Boolean = utcTimeMillis >= today
+                    override fun isSelectableYear(year: Int): Boolean =
+                        year >= java.time.Instant.ofEpochMilli(today).atZone(java.time.ZoneOffset.UTC).year
+                }
+            }
+        )
         DatePickerDialog(
             onDismissRequest = { showDatePicker = false },
             confirmButton = {

@@ -172,7 +172,9 @@ data class ParticipantEntity(
     /** Liczba miejsc w aucie tej osoby, wraz z kierowcą (0 = nie jedzie autem). */
     val carSeats: Int,
     val needsKayak: Boolean,
-    val serverId: Long? = null
+    val serverId: Long? = null,
+    /** Organizator może usunąć spływ dla wszystkich i mianować kolejnych organizatorów. */
+    @ColumnInfo(defaultValue = "0") val isOrganizer: Boolean = false
 )
 
 @Entity(
