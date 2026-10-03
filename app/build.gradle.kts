@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -8,7 +10,7 @@ plugins {
 
 // Token publiczny Mapbox (pk.…) czytamy z local.properties, który nie trafia do gita:
 //   MAPBOX_ACCESS_TOKEN=pk.xxxxx
-val localProps = java.util.Properties().apply {
+val localProps = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) file.inputStream().use { load(it) }
 }
