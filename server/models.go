@@ -83,7 +83,8 @@ type Trip struct {
 	SectionKey *string   `json:"section_key,omitempty"`
 	StartDate  string    `json:"start_date"` // YYYY-MM-DD
 	Overnight  bool      `json:"overnight"`
-	Organizer  string    `json:"organizer"`
+	Organizer  string    `json:"organizer"` // w odpowiedziach: pierwszy aktualny organizator (twórca, jeśli nadal nim jest)
+	Organizers []string  `json:"organizers,omitempty"`
 	Notes      string    `json:"notes"`
 	CreatedAt  time.Time `json:"created_at"`
 }
@@ -94,6 +95,8 @@ type Participant struct {
 	Name       string `json:"name"`
 	CarSeats   int    `json:"car_seats"`
 	NeedsKayak bool   `json:"needs_kayak"`
+	// IsOrganizer: organizator może usuwać spływ i mianować kolejnych organizatorów.
+	IsOrganizer bool `json:"is_organizer"`
 }
 
 type GearItem struct {

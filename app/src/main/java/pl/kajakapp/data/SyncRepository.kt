@@ -538,10 +538,11 @@ class SyncRepository(
     }
 
     /**
-     * Usuwa spływ z serwera przed usunięciem go z telefonu: organizator kasuje spływ dla wszystkich,
-     * pozostali uczestnicy tylko opuszczają spływ (usuwają siebie). Spływ tylko lokalny nie wymaga serwera.
+     * Usuwa spływ z serwera przed usunięciem go z telefonu. Organizator może skasować spływ dla wszystkich
+     * albo (gdy jest drugi organizator) tylko go opuścić; pozostali uczestnicy mogą go tylko opuścić
+     * (usuwają siebie). Spływ tylko lokalny nie wymaga serwera.
      */
-    suspend fun removeTripFromServer(tripId: Long): SyncOutcome {
+    suspend fun removeTripFromServer(tripId: Long, leaveOnly: Boolean): SyncOutcome {
         // Stan spływu czytamy pod blokadą, żeby nie zdublować się z trwającym udostępnianiem.
         return mutex.withLock {
             val trip = tripDao.getTrip(tripId) ?: return@withLock SyncOutcome(true, "")
@@ -551,7 +552,9 @@ class SyncRepository(
                 ?: return@withLock needLogin("usunąć lub opuścić udostępniony spływ")
             guarded {
                 val api = api()
-                if ((trip.ownerUsername ?: trip.organizer).equals(user, ignoreCase = true)) {
+                val iAmOrganizer = tripDao.participantsOf(tripId)
+                    .any { it.isOrganizer && it.name.equals(user, ignoreCase = true) }
+                if (iAmOrganizer && !leaveOnly) {
                     val response = api.deleteTrip(serverTripId)
                     if (!response.isSuccessful && response.code() != 404) throw HttpException(response)
                 } else {
@@ -561,9 +564,31 @@ class SyncRepository(
                     if (myServerId != null) {
                         val response = api.deleteParticipant(serverTripId, myServerId)
                         if (!response.isSuccessful && response.code() != 404) throw HttpException(response)
+                    } else if (fetchTripOrNull(api, serverTripId) != null) {
+                        // Serwer nadal widzi nas w spływie, a nie wiemy, który wpis jest nasz – nie usuwamy samego telefonu.
+                        return@guarded SyncOutcome(false, "Nie udało się ustalić Twojego udziału na serwerze – zsynchronizuj spływ i spróbuj ponownie.")
                     }
                 }
                 SyncOutcome(true, "")
+            }
+        }
+    }
+
+    /** Mianuje uczestnika (lokalne id) organizatorem; wymaga, żeby sam był już na serwerze. */
+    suspend fun makeOrganizer(tripId: Long, participantId: Long): SyncOutcome {
+        if (!enabled) return notEnabled
+        if (!loggedIn) return needLogin("mianować organizatora")
+        return mutex.withLock {
+            guarded {
+                val trip = tripDao.getTrip(tripId)
+                val serverTripId = trip?.serverId
+                    ?: return@guarded SyncOutcome(false, "Spływ nie jest udostępniony na serwerze.")
+                val target = tripDao.participantsOf(tripId).firstOrNull { it.id == participantId }
+                val targetServerId = target?.serverId
+                    ?: return@guarded SyncOutcome(false, "Ta osoba nie jest jeszcze na serwerze.")
+                api().promoteParticipant(serverTripId, targetServerId)
+                mergeTrip(tripId, api().trip(serverTripId))
+                SyncOutcome(true, "${target.name} jest teraz organizatorem.")
             }
         }
     }
@@ -598,7 +623,12 @@ class SyncRepository(
                 val local = localParticipants.firstOrNull { it.serverId == r.id }
                 if (local != null) {
                     tripDao.updateParticipant(
-                        local.copy(name = r.name, carSeats = r.carSeats, needsKayak = r.needsKayak)
+                        local.copy(
+                            name = r.name,
+                            carSeats = r.carSeats,
+                            needsKayak = r.needsKayak,
+                            isOrganizer = r.isOrganizer
+                        )
                     )
                 } else {
                     tripDao.insertParticipant(
@@ -607,7 +637,8 @@ class SyncRepository(
                             name = r.name,
                             carSeats = r.carSeats,
                             needsKayak = r.needsKayak,
-                            serverId = r.id
+                            serverId = r.id,
+                            isOrganizer = r.isOrganizer
                         )
                     )
                 }

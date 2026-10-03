@@ -108,7 +108,8 @@ data class ParticipantDto(
     val id: Long,
     val name: String,
     @SerialName("car_seats") val carSeats: Int = 0,
-    @SerialName("needs_kayak") val needsKayak: Boolean = false
+    @SerialName("needs_kayak") val needsKayak: Boolean = false,
+    @SerialName("is_organizer") val isOrganizer: Boolean = false
 )
 
 /** Uczestnika można dodać tylko jako siebie – nazwę serwer bierze z konta, więc jej nie wysyłamy. */
@@ -217,6 +218,9 @@ interface KajakServerApi {
 
     @POST("api/trips/{id}/participants")
     suspend fun addParticipant(@Path("id") tripId: Long, @Body body: ParticipantRequest): ParticipantDto
+
+    @POST("api/trips/{id}/participants/{pid}/organizer")
+    suspend fun promoteParticipant(@Path("id") tripId: Long, @Path("pid") id: Long): ParticipantDto
 
     @DELETE("api/trips/{id}/participants/{pid}")
     suspend fun deleteParticipant(@Path("id") tripId: Long, @Path("pid") id: Long): Response<Unit>

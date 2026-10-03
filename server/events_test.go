@@ -100,7 +100,7 @@ func TestLiveTripEvents(t *testing.T) {
 
 	ownerStream := openStream(t, ts.URL, owner)
 
-	code, body := callAs(t, owner, "POST", ts.URL+"/api/trips", map[string]any{"title": "Spływ", "start_date": "2026-10-10"})
+	code, body := callAs(t, owner, "POST", ts.URL+"/api/trips", map[string]any{"title": "Spływ", "start_date": futureDate()})
 	if code != 201 {
 		t.Fatalf("create: %d %s", code, body)
 	}

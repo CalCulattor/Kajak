@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const testPassword = "haslo-testowe-1"
@@ -234,7 +235,7 @@ func TestTripFlow(t *testing.T) {
 
 	code, body := call(t, "POST", ts.URL+"/api/trips", map[string]any{
 		"title": "Weekend na Krutyni", "section_key": "krutynia",
-		"start_date": "2026-10-10", "overnight": true,
+		"start_date": futureDate(), "overnight": true,
 	})
 	if code != 201 {
 		t.Fatalf("create trip: %d %s", code, body)
@@ -312,14 +313,14 @@ func TestTripAndCheckInValidation(t *testing.T) {
 		t.Errorf("nieistniejąca data: %d", code)
 	}
 	code, _ = call(t, "POST", ts.URL+"/api/trips", map[string]any{
-		"title": " ", "start_date": "2026-10-10",
+		"title": " ", "start_date": futureDate(),
 	})
 	if code != 400 {
 		t.Errorf("pusty tytuł: %d", code)
 	}
 
 	_, body := call(t, "POST", ts.URL+"/api/trips", map[string]any{
-		"title": "T", "start_date": "2026-10-10",
+		"title": "T", "start_date": futureDate(),
 	})
 	var trip Trip
 	decodeInto(t, body, &trip)
@@ -385,3 +386,6 @@ func TestRequestBodyTooLarge(t *testing.T) {
 		t.Fatalf("oczekiwano 413, jest %d", code)
 	}
 }
+
+// futureDate zwraca datę za 30 dni (testy nie mogą zależeć od stałego kalendarza).
+func futureDate() string { return time.Now().UTC().AddDate(0, 0, 30).Format("2006-01-02") }

@@ -48,6 +48,7 @@ Wszystkie odpowiedzi to JSON. Błędy mają postać `{"error": "..."}`.
 | Metoda i ścieżka | Opis |
 | --- | --- |
 | `GET /api/health` | Sprawdzenie, czy serwer działa (bez logowania). |
+| `POST /api/trips/{id}/participants/{pid}/organizer` | Organizator mianuje uczestnika organizatorem (powtórzenie jest bezpieczne). Pole `is_organizer` jest w każdym uczestniku. Organizator może wyjść (`DELETE` na sobie) tylko wtedy, gdy jest drugi organizator – inaczej 403. |
 | `GET /api/events` | Aktualizacje „na żywo” (Server-Sent Events), tylko po zalogowaniu. Połączenie jest otwarte stale, co 20 s serwer wysyła `: ping`. Zdarzenia niosą tylko identyfikatory, dane klient pobiera zwykłymi (autoryzowanymi) endpointami: `trip` `{"trip_id":N}` (zmiana uczestników, wyposażenia, zameldowań, usunięcie), `trips` (nowy lub usunięty spływ), `routes` (nowa trasa), `obstacles` `{"section_key":"..."}`. Reverse proxy nie może buforować odpowiedzi ani skracać czasu odczytu (nginx: `proxy_buffering off; proxy_read_timeout 1h;`). |
 | `POST /api/register` | Nowe konto: `username` (3–24 znaki: a-z, A-Z, 0-9, `_ . -`; unikalne bez względu na wielkość liter) i `password` (8–128 znaków). Zwraca `{"token","username"}`; 409 gdy nazwa zajęta. |
 | `POST /api/login` | Logowanie tym samym ciałem. 401 przy złych danych, 429 po 8 nieudanych próbach na konto (blokada na 10 min). |
@@ -58,9 +59,9 @@ Wszystkie odpowiedzi to JSON. Błędy mają postać `{"error": "..."}`.
 | `POST /api/sections/{key}/obstacles` | Zgłoszenie przeszkody: `type`, `description`, opcjonalnie `lat` i `lon` oraz `client_id`. |
 | `POST /api/obstacles/{id}/confirm` | „Nadal tu jest”. |
 | `POST /api/obstacles/{id}/remove-vote` | „Już usunięte”. |
-| `GET /api/trips`, `POST /api/trips` | Lista (każdy zalogowany) i tworzenie spływów (`title`, `start_date` jako `RRRR-MM-DD`, opcjonalnie `section_key`, `overnight`, `notes`). Organizatorem jest zawsze zalogowany użytkownik i zostaje pierwszym uczestnikiem. |
-| `GET /api/trips/{id}`, `DELETE /api/trips/{id}` | Szczegóły (z uczestnikami, wyposażeniem, zameldowaniami) – tylko dla uczestników (inni dostają 403). Usunąć spływ z całą zawartością może tylko organizator. |
-| `POST /api/trips/{id}/participants`, `DELETE .../participants/{pid}` | Uczestnicy. `POST` dodaje **zawsze zalogowanego użytkownika** (`car_seats`, `needs_kayak`; opcjonalne `name` musi być zgodne z kontem, inaczej 403); ponowne wywołanie aktualizuje jego dane. `DELETE` pozwala usunąć tylko siebie; organizator nie może opuścić własnego spływu (może go usunąć). |
+| `GET /api/trips`, `POST /api/trips` | Lista (każdy zalogowany) i tworzenie spływów (`title`, `start_date` jako `RRRR-MM-DD`, opcjonalnie `section_key`, `overnight`, `notes`). Organizatorem jest zawsze zalogowany użytkownik i zostaje pierwszym uczestnikiem; `start_date` nie może być z przeszłości (tolerancja jednego dnia ze względu na strefy czasowe). W odpowiedziach `organizers` to lista aktualnych organizatorów, a `organizer` – twórca, dopóki jest organizatorem, w przeciwnym razie pierwszy organizator. |
+| `GET /api/trips/{id}`, `DELETE /api/trips/{id}` | Szczegóły (z uczestnikami, wyposażeniem, zameldowaniami) – tylko dla uczestników (inni dostają 403). Usunąć spływ z całą zawartością może każdy organizator. |
+| `POST /api/trips/{id}/participants`, `DELETE .../participants/{pid}` | Uczestnicy. `POST` dodaje **zawsze zalogowanego użytkownika** (`car_seats`, `needs_kayak`; opcjonalne `name` musi być zgodne z kontem, inaczej 403); ponowne wywołanie aktualizuje jego dane. `DELETE` pozwala usunąć tylko siebie; jedyny organizator nie może wyjść (musi mianować następcę albo usunąć spływ). |
 | `POST /api/trips/{id}/gear`, `PATCH`, `DELETE .../gear/{gid}` | Wyposażenie (tylko uczestnicy; `assigned_to` musi być uczestnikiem spływu). `PATCH` przyjmuje `packed` i/lub `assigned_to` (`null` czyści przypisanie). |
 | `GET /api/trips/{id}/checkins`, `POST` | Zameldowania (tylko uczestnicy; można zameldować tylko siebie): `lat`, `lon`, opcjonalnie `fix_at`, `needs_help`, `client_id` (`person_name` opcjonalne, musi zgadzać się z kontem). Lista jest od najnowszego. |
 
@@ -98,7 +99,7 @@ curl -X POST http://127.0.0.1:8080/api/trips \
 
 - Odzyskiwania hasła (konta nie mają e-maila), zmiany hasła i usuwania konta.
 - Limitu głosów na osobę przy przeszkodach (jedno konto może głosować wielokrotnie).
-- Dostępu organizatora do usuwania innych uczestników.
+- Usuwania innych uczestników przez organizatora oraz odbierania roli organizatora.
 - Prawdziwej bazy danych zamiast pliku JSON oraz własnego TLS (na razie za reverse proxy).
 - **Uwaga przy aktualizacji:** dane z wersji bez kont (`data.json` ze spływami, których organizatorem
   jest dowolny tekst) nie pasują do nowego modelu. Przed wdrożeniem usuń stary `data.json`.

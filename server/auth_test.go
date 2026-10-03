@@ -182,7 +182,7 @@ func TestTripPermissions(t *testing.T) {
 	ewa := authToken(t, ts.URL, "Ewa")
 
 	// Twórca jest organizatorem niezależnie od tego, co wyśle w żądaniu.
-	code, body := callAs(t, owner, "POST", ts.URL+"/api/trips", map[string]any{"title": "Spływ", "start_date": "2026-10-10"})
+	code, body := callAs(t, owner, "POST", ts.URL+"/api/trips", map[string]any{"title": "Spływ", "start_date": futureDate()})
 	if code != 201 {
 		t.Fatalf("create: %d %s", code, body)
 	}
@@ -191,7 +191,7 @@ func TestTripPermissions(t *testing.T) {
 	if trip.Organizer != "owner" {
 		t.Fatalf("organizer = %q", trip.Organizer)
 	}
-	if code, _ = callAs(t, owner, "POST", ts.URL+"/api/trips", map[string]any{"title": "x", "start_date": "2026-10-10", "organizer": "ktos"}); code != 400 {
+	if code, _ = callAs(t, owner, "POST", ts.URL+"/api/trips", map[string]any{"title": "x", "start_date": futureDate(), "organizer": "ktos"}); code != 400 {
 		t.Errorf("pole organizer powinno być odrzucone: %d", code)
 	}
 	url := ts.URL + "/api/trips/" + itoa(trip.ID)

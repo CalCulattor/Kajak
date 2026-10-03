@@ -418,7 +418,9 @@ data class TripDetailState(
     /** Zalogowane konto (null = niezalogowany). */
     val currentUser: String? = null,
     /** true dla organizatora (a w spływie tylko lokalnym – zawsze). */
-    val isOwner: Boolean = true
+    val isOrganizer: Boolean = true,
+    /** true, gdy w spływie jest jeszcze inny organizator, więc organizator może go opuścić. */
+    val hasOtherOrganizer: Boolean = false
 )
 
 class TripDetailViewModel(
@@ -456,10 +458,16 @@ class TripDetailViewModel(
         combine(data, syncing, message, settings.session) { d, isSyncing, msg, session ->
             val user = session?.username
             val trip = d.trip
-            val owner = trip != null &&
-                (trip.serverId == null ||
-                    (user != null && (trip.ownerUsername ?: trip.organizer).equals(user, ignoreCase = true)))
-            d.copy(syncing = isSyncing, message = msg, currentUser = user, isOwner = owner)
+            val me = d.participants.firstOrNull { it.name.equals(user, ignoreCase = true) }
+            val organizer = trip != null && (trip.serverId == null || me?.isOrganizer == true)
+            val otherOrganizer = d.participants.any { it.isOrganizer && it.id != me?.id }
+            d.copy(
+                syncing = isSyncing,
+                message = msg,
+                currentUser = user,
+                isOrganizer = organizer,
+                hasOtherOrganizer = otherOrganizer
+            )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), TripDetailState())
 
     private val isShared: Boolean get() = state.value.trip?.serverId != null
@@ -566,12 +574,13 @@ class TripDetailViewModel(
 
     /**
      * Usuwa spływ z telefonu. Spływ udostępniony najpierw znika z serwera: organizator usuwa go
-     * dla wszystkich, pozostali uczestnicy tylko opuszczają spływ. Bez połączenia nic nie jest
-     * usuwane, żeby spływ nie wrócił po synchronizacji.
+     * dla wszystkich albo (gdy [leaveOnly], dozwolone przy drugim organizatorze) tylko go opuszcza;
+     * pozostali uczestnicy zawsze tylko go opuszczają. Bez połączenia nic nie jest usuwane –
+     * nie da się zrezygnować ze spływu tylko lokalnie.
      */
-    fun deleteTrip(onDeleted: () -> Unit) {
+    fun deleteTrip(leaveOnly: Boolean, onDeleted: () -> Unit) {
         viewModelScope.launch {
-            val result = sync.removeTripFromServer(tripId)
+            val result = sync.removeTripFromServer(tripId, leaveOnly)
             if (result.ok) {
                 trips.deleteTrip(tripId)
                 onDeleted()
@@ -581,11 +590,11 @@ class TripDetailViewModel(
         }
     }
 
-    /** Usuwa spływ tylko z tego telefonu (bez serwera) – wyjście awaryjne, gdy nie ma połączenia. */
-    fun deleteTripLocalOnly(onDeleted: () -> Unit) {
+    /** Organizator mianuje innego uczestnika (z kontem) organizatorem. */
+    fun makeOrganizer(participantId: Long) {
         viewModelScope.launch {
-            trips.deleteTrip(tripId)
-            onDeleted()
+            val result = sync.makeOrganizer(tripId, participantId)
+            if (result.message.isNotEmpty()) message.value = result.message
         }
     }
 
