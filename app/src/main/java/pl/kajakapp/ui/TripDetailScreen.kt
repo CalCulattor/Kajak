@@ -61,10 +61,9 @@ import pl.kajakapp.data.db.ParticipantEntity
 import pl.kajakapp.util.Fmt
 import pl.kajakapp.util.openInMaps
 
-private val TAB_TITLES = listOf("Uczestnicy", "Wyposażenie", "Pozycje")
+private val TAB_TITLES = listOf("Uczestnicy", "Wyposażenie")
 
 /** Po ilu minutach pozycja GPS jest oznaczana jako „stara” przy zameldowaniu. */
-private const val OLD_FIX_MINUTES = 5L
 
 @Composable
 fun TripDetailScreen(tripId: Long, onBack: () -> Unit) {
@@ -160,7 +159,7 @@ fun TripDetailScreen(tripId: Long, onBack: () -> Unit) {
                         onUpdateMine = vm::updateMyData,
                         onRemove = vm::removeParticipant
                     )
-                    1 -> GearTab(
+                    else -> GearTab(
                         gear = state.gear,
                         // W spływie na serwerze przypisać można tylko uczestników z kontami.
                         participants = if (trip.serverId != null) {
@@ -173,14 +172,6 @@ fun TripDetailScreen(tripId: Long, onBack: () -> Unit) {
                         onPacked = vm::setGearPacked,
                         onAssign = vm::assignGear,
                         onRemove = vm::removeGear
-                    )
-                    else -> CheckInsTab(
-                        defaultName = state.currentUser ?: trip.organizer,
-                        lockedName = if (trip.serverId != null) state.currentUser else null,
-                        participants = state.participants,
-                        checkIns = state.checkIns,
-                        onCheckIn = vm::checkIn,
-                        onCancelHelp = vm::cancelHelp
                     )
                 }
             }
@@ -481,148 +472,3 @@ private fun GearTab(
     }
 }
 
-@Composable
-private fun CheckInsTab(
-    defaultName: String,
-    lockedName: String?,
-    participants: List<ParticipantEntity>,
-    checkIns: List<CheckInEntity>,
-    onCheckIn: (name: String, point: pl.kajakapp.util.GeoPoint, needsHelp: Boolean) -> Unit,
-    onCancelHelp: (checkInId: Long) -> Unit
-) {
-    val context = LocalContext.current
-    val snackbar = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
-
-    var showDialog by remember { mutableStateOf(false) }
-    var locating by remember { mutableStateOf(false) }
-    var pending by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
-
-    val requestLocation = rememberLocationRequester { point ->
-        val request = pending
-        pending = null
-        locating = false
-        if (request != null) {
-            if (point != null) {
-                onCheckIn(request.first, point, request.second)
-            } else {
-                scope.launch {
-                    snackbar.showSnackbar(
-                        "Nie udało się ustalić pozycji. Sprawdź uprawnienia i włącz lokalizację."
-                    )
-                }
-            }
-        }
-    }
-
-    Box(Modifier.fillMaxSize()) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "Zameldowanie zapisuje pozycję GPS na tym telefonie. Gdy spływ jest udostępniony " +
-                            "na serwerze, pozycja trafia też do reszty grupy (pobierzesz je przyciskiem " +
-                            "synchronizacji).",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    if (locating) LinearProgressIndicator(Modifier.fillMaxWidth())
-                    OutlinedButton(onClick = { showDialog = true }, enabled = !locating) {
-                        Text("Zamelduj mnie / poproś o pomoc")
-                    }
-                }
-            }
-            if (checkIns.isEmpty()) {
-                item { Text("Brak zameldowań.") }
-            }
-            items(checkIns, key = { it.id }) { c ->
-                val colors = if (c.needsHelp) {
-                    CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                        contentColor = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                } else {
-                    CardDefaults.cardColors()
-                }
-                Card(Modifier.fillMaxWidth(), colors = colors) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(
-                            (if (c.needsHelp) "POTRZEBUJE POMOCY: " else "") + c.personName,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            "Zameldowano ${Fmt.dateTime(c.createdAt)}",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        val fixAgeMinutes = (c.createdAt - c.fixAt) / 60_000L
-                        if (fixAgeMinutes >= OLD_FIX_MINUTES) {
-                            Text(
-                                "Uwaga: pozycja GPS sprzed ${Fmt.ageText(c.fixAt, c.createdAt).removeSuffix(" temu")}.",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                        Row {
-                            TextButton(onClick = { openInMaps(context, c.lat, c.lon, c.personName) }) {
-                                Text("Pokaż na mapie")
-                            }
-                            // Wezwanie odwołać może tylko osoba, która je wysłała.
-                            if (c.needsHelp && c.personName.equals(lockedName ?: defaultName, ignoreCase = true)) {
-                                TextButton(onClick = { onCancelHelp(c.id) }) { Text("Odwołaj wezwanie") }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
-    }
-
-    if (showDialog) {
-        var name by remember { mutableStateOf(lockedName ?: defaultName) }
-        var needsHelp by remember { mutableStateOf(false) }
-        AlertDialog(
-            onDismissRequest = { showDialog = false },
-            title = { Text("Zameldowanie") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (lockedName != null) {
-                        // W spływie na serwerze można zameldować tylko siebie.
-                        Text("Melduje się: $lockedName", fontWeight = FontWeight.Medium)
-                    } else {
-                        ChoiceButton(
-                            selectedLabel = "Wybierz osobę",
-                            options = participants.map { it.name },
-                            optionLabel = { it },
-                            onSelected = { name = it }
-                        )
-                        OutlinedTextField(
-                            value = name,
-                            onValueChange = { if (it.length <= 80) name = it },
-                            label = { Text("Kto się melduje") },
-                            singleLine = true
-                        )
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(checked = needsHelp, onCheckedChange = { needsHelp = it })
-                        Text("  Potrzebuję pomocy")
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = name.isNotBlank(),
-                    onClick = {
-                        showDialog = false
-                        pending = name to needsHelp
-                        locating = true
-                        requestLocation()
-                    }
-                ) { Text("Zamelduj") }
-            },
-            dismissButton = { TextButton(onClick = { showDialog = false }) { Text("Anuluj") } }
-        )
-    }
-}

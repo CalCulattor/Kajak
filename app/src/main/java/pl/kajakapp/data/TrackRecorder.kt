@@ -30,7 +30,9 @@ data class LiveTrack(
     /** Łączny czas dotychczasowych pauz (zakończonych). */
     val pausedMs: Long = 0,
     /** Kiedy rozpoczęła się trwająca pauza; null, gdy trasa nie jest wstrzymana. */
-    val pausedSince: Long? = null
+    val pausedSince: Long? = null,
+    /** Lokalny spływ, do którego przypisano trasę (null = brak). */
+    val tripId: Long? = null
 ) {
     val paused: Boolean get() = pausedSince != null
 
@@ -58,6 +60,7 @@ class TrackRecorder(
     private var trackId: Long? = null
     private var title: String = ""
     private var startedAt = 0L
+    private var tripId: Long? = null
     private var gpsEnabled = true
     private var lastAccuracy: Float? = null
     private var maxLiveSpeed = 0.0
@@ -117,7 +120,7 @@ class TrackRecorder(
             startedAt = now
         )
         val id = dao.insertTrack(entity)
-        reset(id, entity.title, now)
+        reset(id, entity.title, now, tripId)
         publish(now)
         return id
     }
@@ -136,7 +139,7 @@ class TrackRecorder(
     }
 
     private suspend fun resumeLocked(t: TrackEntity): Long {
-        reset(t.id, t.title, t.startedAt)
+        reset(t.id, t.title, t.startedAt, t.tripId)
         for (p in dao.pointsOf(t.id)) {
             if (acc.add(TrackPoint(p.time, p.lat, p.lon, p.accuracy))) appendPath(p.lat, p.lon)
         }
@@ -146,7 +149,8 @@ class TrackRecorder(
         return t.id
     }
 
-    private fun reset(id: Long, title: String, startedAt: Long) {
+    private fun reset(id: Long, title: String, startedAt: Long, tripId: Long?) {
+        this.tripId = tripId
         acc = TrackAccumulator()
         trackId = id
         path.clear()
@@ -234,7 +238,8 @@ class TrackRecorder(
             lastAccuracyM = lastAccuracy,
             gpsEnabled = gpsEnabled,
             pausedMs = pausedTotal,
-            pausedSince = pausedSince
+            pausedSince = pausedSince,
+            tripId = tripId
         )
     }
 

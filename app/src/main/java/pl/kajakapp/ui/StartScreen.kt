@@ -3,12 +3,19 @@
 package pl.kajakapp.ui
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.os.Build
+import android.os.Bundle
+import android.os.Looper
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,10 +25,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -44,29 +53,40 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import pl.kajakapp.data.PersonOnMap
+import pl.kajakapp.domain.PathPoint
 import pl.kajakapp.data.LiveTrack
 import pl.kajakapp.data.db.TrackEntity
 import pl.kajakapp.data.db.TripEntity
 import pl.kajakapp.tracking.TrackingService
 import pl.kajakapp.util.Fmt
+import kotlin.math.abs
+import kotlin.math.max
 
 /** Pytanie o uprawnienia przy wejściu na ekran zadajemy raz na uruchomienie aplikacji. */
 private var askedAtEntry = false
 
+private const val PEOPLE_REFRESH_MS = 8_000L
+private const val GPS_FRESH_MS = 15_000L
 private const val STARTING_WAIT_MS = 8_000L
 private const val STOPPING_WAIT_MS = 20_000L
 private const val STALE_FIX_MS = 30_000L
@@ -103,6 +123,47 @@ fun StartScreen(
     var starting by remember { mutableStateOf(false) }
     var stopping by remember { mutableStateOf(false) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var confirmHelp by remember { mutableStateOf(false) }
+    var focusKey by remember { mutableIntStateOf(0) }
+    var focusPoint by remember { mutableStateOf<PathPoint?>(null) }
+    val scope = rememberCoroutineScope()
+    val me by container.settings.session.collectAsStateWithLifecycle()
+    val myName = me?.username
+
+    // Spływ, którego uczestników pokazujemy na mapie: ten, do którego przypisano nagrywaną trasę,
+    // a bez nagrywania – udostępniony spływ trwający teraz (od dnia przed startem do dwóch dni po starcie).
+    val contextTrip = pickContextTrip(state.trips, live?.tripId, System.currentTimeMillis())
+    var people by remember { mutableStateOf<List<PersonOnMap>>(emptyList()) }
+    LaunchedEffect(contextTrip?.id, myName) {
+        people = emptyList()
+        val tripId = contextTrip?.id ?: return@LaunchedEffect
+        while (true) {
+            container.sync.fetchLocations(tripId)?.let { people = it }
+            delay(PEOPLE_REFRESH_MS)
+        }
+    }
+    val others = people.filter { !it.name.equals(myName, ignoreCase = true) }
+    val helpers = others.filter { it.needsHelp }
+    val myAlert = people.firstOrNull { it.needsHelp && it.name.equals(myName, ignoreCase = true) }
+
+    val gpsStatus = rememberGpsStatus(active = locationGranted, recorderFixAt = live?.lastFixAt)
+
+    val requestHelpLocation = rememberLocationRequester { point ->
+        val trip = contextTrip
+        val user = myName
+        if (point == null) {
+            Toast.makeText(context, "Nie udało się ustalić pozycji. Włącz lokalizację i spróbuj ponownie.", Toast.LENGTH_LONG).show()
+        } else if (trip != null && user != null) {
+            scope.launch {
+                container.trips.checkIn(trip.id, user, point.lat, point.lon, point.fixAt, true)
+                val outcome = container.sync.syncTrip(trip.id)
+                val text = if (outcome.ok) "Wezwano pomoc – uczestnicy spływu dostali powiadomienie."
+                else "Wezwanie zapisane na telefonie, ale nie wysłane: ${outcome.message}"
+                Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+                container.sync.fetchLocations(trip.id)?.let { people = it }
+            }
+        }
+    }
 
     LaunchedEffect(starting) {
         if (starting) {
@@ -215,6 +276,13 @@ fun StartScreen(
             AppTopBar(
                 title = { Text("KajakApp", fontWeight = FontWeight.Bold) },
                 actions = {
+                    IconButton(onClick = { confirmHelp = true }) {
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = "Wezwij pomoc",
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Konto i ustawienia")
                     }
@@ -228,8 +296,12 @@ fun StartScreen(
                 modifier = Modifier.fillMaxSize(),
                 followUser = locationGranted,
                 ornamentsOnTop = true,
-                recenterKey = recenter
+                recenterKey = recenter,
+                people = others,
+                focus = focusPoint,
+                focusKey = focusKey
             )
+            GpsStatusChip(gpsStatus, Modifier.align(Alignment.TopStart).padding(12.dp))
             if (locationGranted) {
                 SmallFloatingActionButton(
                     onClick = { recenter++ },
@@ -238,8 +310,37 @@ fun StartScreen(
                     contentColor = MaterialTheme.colorScheme.primary
                 ) { Icon(Icons.Default.Place, contentDescription = "Pokaż moją pozycję") }
             }
-            Surface(
+            Column(
                 modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+            helpers.forEach { person ->
+                HelpBanner(
+                    text = "${person.name} wzywa pomocy!",
+                    actionLabel = "Pokaż na mapie",
+                    onAction = {
+                        focusPoint = PathPoint(person.lat, person.lon)
+                        focusKey++
+                    }
+                )
+            }
+            if (myAlert != null && contextTrip != null) {
+                HelpBanner(
+                    text = "Wezwałeś pomoc – uczestnicy spływu widzą Twoją pozycję.",
+                    actionLabel = "Odwołaj",
+                    onAction = {
+                        scope.launch {
+                            val outcome = container.sync.cancelHelpByServerId(contextTrip.id, myAlert.helpCheckInId)
+                            if (!outcome.ok && outcome.message.isNotEmpty()) {
+                                Toast.makeText(context, outcome.message, Toast.LENGTH_LONG).show()
+                            }
+                            container.sync.fetchLocations(contextTrip.id)?.let { people = it }
+                        }
+                    }
+                )
+            }
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
                 shape = MaterialTheme.shapes.extraLarge,
                 color = MaterialTheme.colorScheme.surface,
                 shadowElevation = 6.dp
@@ -271,7 +372,42 @@ fun StartScreen(
                     }
                 }
             }
+            }
         }
+    }
+
+    if (confirmHelp) {
+        val trip = contextTrip
+        AlertDialog(
+            onDismissRequest = { confirmHelp = false },
+            title = { Text("Wezwać pomoc?") },
+            text = {
+                Text(
+                    when {
+                        myName == null -> "Zaloguj się (ikona ustawień), aby wzywać pomoc w spływie."
+                        trip == null -> "Nie masz teraz spływu udostępnionego na serwerze, więc wezwanie nikogo nie powiadomi. " +
+                            "W razie zagrożenia życia zadzwoń pod numer 112 (nad wodą także GOPR/WOPR: 601 100 300)."
+                        else -> "Wszyscy uczestnicy spływu „${trip.title}” dostaną informację, że wzywasz pomocy, " +
+                            "i zobaczą Twoją pozycję na mapie. W razie zagrożenia życia zadzwoń też pod numer 112."
+                    }
+                )
+            },
+            confirmButton = {
+                if (myName != null && trip != null) {
+                    TextButton(onClick = {
+                        confirmHelp = false
+                        requestHelpLocation()
+                    }) { Text("Wezwij pomoc", color = MaterialTheme.colorScheme.error) }
+                } else {
+                    TextButton(onClick = { confirmHelp = false }) { Text("OK") }
+                }
+            },
+            dismissButton = {
+                if (myName != null && trip != null) {
+                    TextButton(onClick = { confirmHelp = false }) { Text("Anuluj") }
+                }
+            }
+        )
     }
 
     if (showStart) {
@@ -381,6 +517,113 @@ private fun LiveStats(
             ) {
                 Text(if (stopping) "Zapisuję…" else "Zakończ", style = MaterialTheme.typography.titleMedium)
             }
+        }
+    }
+}
+
+/** Wybiera spływ, którego uczestników pokazujemy na mapie (patrz komentarz przy użyciu). */
+private fun pickContextTrip(trips: List<TripEntity>, liveTripId: Long?, now: Long): TripEntity? {
+    liveTripId?.let { id -> trips.firstOrNull { it.id == id && it.serverId != null }?.let { return it } }
+    val day = 24L * 60 * 60 * 1000
+    return trips
+        .filter { it.serverId != null && it.startDateUtcMillis - day <= now && now <= it.startDateUtcMillis + 2 * day }
+        .minByOrNull { abs(it.startDateUtcMillis - now) }
+}
+
+private enum class GpsStatus { OFF, SEARCHING, OK }
+
+private fun isGpsProviderOn(context: Context): Boolean =
+    (context.getSystemService(Context.LOCATION_SERVICE) as LocationManager)
+        .isProviderEnabled(LocationManager.GPS_PROVIDER)
+
+/** Sprawdza, czy telefon ma teraz sygnał GPS: nasłuchuje odczytów, gdy ekran jest widoczny. */
+@SuppressLint("MissingPermission")
+@Composable
+private fun rememberGpsStatus(active: Boolean, recorderFixAt: Long?): GpsStatus {
+    val context = LocalContext.current
+    var providerOn by remember { mutableStateOf(isGpsProviderOn(context)) }
+    var lastFix by remember { mutableLongStateOf(0L) }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = System.currentTimeMillis()
+            providerOn = isGpsProviderOn(context)
+            delay(2_000)
+        }
+    }
+    // Nasłuch tylko, gdy ekran jest na wierzchu – w tle nie zużywamy baterii.
+    LifecycleResumeEffect(active) {
+        val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val listener = object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+                lastFix = System.currentTimeMillis()
+            }
+
+            override fun onProviderEnabled(provider: String) = Unit
+            override fun onProviderDisabled(provider: String) = Unit
+
+            @Deprecated("Wymagane na starszych wersjach Androida")
+            override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
+        }
+        if (active) {
+            try {
+                manager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 2_000L, 0f, listener, Looper.getMainLooper())
+            } catch (e: SecurityException) {
+                // Brak uprawnienia – status zostanie „szukam”.
+            } catch (e: IllegalArgumentException) {
+                // Brak dostawcy GPS.
+            }
+        }
+        onPauseOrDispose { manager.removeUpdates(listener) }
+    }
+    val newest = max(lastFix, recorderFixAt ?: 0L)
+    return when {
+        !providerOn -> GpsStatus.OFF
+        newest > 0 && now - newest <= GPS_FRESH_MS -> GpsStatus.OK
+        else -> GpsStatus.SEARCHING
+    }
+}
+
+/** Mały wskaźnik sygnału GPS na mapie (w miejscu skali). */
+@Composable
+private fun GpsStatusChip(status: GpsStatus, modifier: Modifier = Modifier) {
+    val (label, color) = when (status) {
+        GpsStatus.OK -> "GPS: jest sygnał" to Color(0xFF2E7D32)
+        GpsStatus.SEARCHING -> "GPS: szukam sygnału" to Color(0xFFF9A825)
+        GpsStatus.OFF -> "GPS wyłączony" to MaterialTheme.colorScheme.error
+    }
+    Surface(
+        modifier = modifier,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 3.dp
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(Modifier.size(10.dp).clip(CircleShape).background(color))
+            Text(label, style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+@Composable
+private fun HelpBanner(text: String, actionLabel: String, onAction: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        shadowElevation = 4.dp
+    ) {
+        Row(
+            Modifier.padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(text, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+            TextButton(onClick = onAction) { Text(actionLabel) }
         }
     }
 }

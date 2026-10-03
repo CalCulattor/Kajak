@@ -8,6 +8,7 @@ import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.PATCH
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -163,6 +164,24 @@ data class CheckInRequest(
 )
 
 @Serializable
+data class LocationRequest(
+    val lat: Double,
+    val lon: Double,
+    @SerialName("fix_at") val fixAt: String
+)
+
+@Serializable
+data class LocationDto(
+    val username: String,
+    val lat: Double,
+    val lon: Double,
+    @SerialName("fix_at") val fixAt: String = "",
+    @SerialName("updated_at") val updatedAt: String = "",
+    @SerialName("needs_help") val needsHelp: Boolean = false,
+    @SerialName("help_check_in_id") val helpCheckInId: Long = 0
+)
+
+@Serializable
 data class CheckInHelpRequest(@SerialName("needs_help") val needsHelp: Boolean)
 
 @Serializable
@@ -243,6 +262,12 @@ interface KajakServerApi {
 
     @POST("api/trips/{id}/checkins")
     suspend fun addCheckIn(@Path("id") tripId: Long, @Body body: CheckInRequest): CheckInDto
+
+    @PUT("api/trips/{id}/location")
+    suspend fun putLocation(@Path("id") tripId: Long, @Body body: LocationRequest): Response<Unit>
+
+    @GET("api/trips/{id}/locations")
+    suspend fun locations(@Path("id") tripId: Long): List<LocationDto>
 
     @PATCH("api/trips/{id}/checkins/{cid}")
     suspend fun patchCheckIn(

@@ -108,3 +108,9 @@ Wersja SDK jest w `gradle/libs.versions.toml` (`mapbox`). Bez tokenu mapa wyświ
 ## Pauza trasy
 
 Podczas nagrywania panel na ekranie Start ma przyciski „Wstrzymaj/Wznów” i „Zakończ” oraz przełącznik „Ukryj/Pokaż statystyki”. Pauza zatrzymuje licznik czasu i pomija odczyty GPS; jej czas jest zapisywany (`pausedMs`, migracja bazy 5→6) i odejmowany od czasu trasy w historii i szczegółach. Ograniczenia: stan pauzy żyje w pamięci (po zabiciu aplikacji trasa wraca do wznowienia jako nie wstrzymana), a lokalizacja jest w trakcie pauzy nadal odbierana (usługa działa), tylko nie zapisywana.
+
+## Współdzielenie pozycji i wezwanie pomocy
+
+- Gdy nagrywana trasa jest przypisana do spływu udostępnionego na serwerze, aplikacja co ok. 10 s wysyła Twoją pozycję (`PUT /api/trips/{id}/location`), a ekran Start co 8 s pobiera pozycje pozostałych uczestników i rysuje je na mapie (pomarańczowe punkty z nazwami). Bez nagrywania mapa pokazuje uczestników udostępnionego spływu z dzisiejszej daty (±1 dzień).
+- Ikona ostrzeżenia obok ustawień na ekranie Start wzywa pomoc: po potwierdzeniu zapisuje zameldowanie z `needs_help` i wysyła je do spływu. Pozostali uczestnicy widzą czerwony baner „… wzywa pomocy!”, a osoba jest podświetlona na mapie na czerwono (przycisk „Pokaż na mapie” przenosi kamerę). Autor może wezwanie odwołać z banera. Powiadomienia działają, gdy aplikacja jest otwarta; zdalne powiadomienia push (aplikacja w tle) wymagałyby np. Firebase Cloud Messaging i nie są częścią tej wersji.
+- Wskaźnik GPS w lewym górnym rogu mapy pokazuje: jest sygnał / szukam sygnału / GPS wyłączony. Wezwanie pomocy nie zastępuje numeru alarmowego 112.

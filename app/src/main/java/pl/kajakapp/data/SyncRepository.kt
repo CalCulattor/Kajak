@@ -22,6 +22,7 @@ import pl.kajakapp.data.db.SectionEntity
 import pl.kajakapp.data.db.TripEntity
 import pl.kajakapp.data.remote.AuthRequest
 import pl.kajakapp.data.remote.CheckInHelpRequest
+import pl.kajakapp.data.remote.LocationRequest
 import pl.kajakapp.data.remote.CheckInRequest
 import pl.kajakapp.data.remote.GearPatchRequest
 import pl.kajakapp.data.remote.GearRequest
@@ -42,6 +43,16 @@ import retrofit2.HttpException
  * (np. synchronizacja jest wyłączona albo wszystko poszło dobrze po cichu).
  */
 data class SyncOutcome(val ok: Boolean, val message: String)
+
+/** Uczestnik spływu widoczny na mapie. [helpCheckInId] to zameldowanie z prośbą o pomoc (0 = brak prośby). */
+data class PersonOnMap(
+    val name: String,
+    val lat: Double,
+    val lon: Double,
+    val needsHelp: Boolean,
+    val helpCheckInId: Long,
+    val updatedAt: Long
+)
 
 data class RemoteTripInfo(
     val id: Long,
@@ -783,6 +794,41 @@ class SyncRepository(
         }
     }
 
+    /** Wysyła własną pozycję do uczestników spływu (best effort – błędy są pomijane). */
+    suspend fun pushLocation(localTripId: Long, lat: Double, lon: Double, fixAt: Long) {
+        if (!enabled || !loggedIn) return
+        try {
+            val serverTripId = tripDao.getTrip(localTripId)?.serverId ?: return
+            api().putLocation(serverTripId, LocationRequest(lat, lon, Instant.ofEpochMilli(fixAt).toString()))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Pozycja na żywo jest chwilowa – następną wyślemy za kilka sekund.
+        }
+    }
+
+    /** Pobiera pozycje uczestników spływu; null, gdy się nie udało albo spływ nie jest udostępniony. */
+    suspend fun fetchLocations(localTripId: Long): List<PersonOnMap>? {
+        if (!enabled || !loggedIn) return null
+        return try {
+            val serverTripId = tripDao.getTrip(localTripId)?.serverId ?: return null
+            api().locations(serverTripId).map {
+                PersonOnMap(
+                    name = it.username,
+                    lat = it.lat,
+                    lon = it.lon,
+                    needsHelp = it.needsHelp,
+                    helpCheckInId = it.helpCheckInId,
+                    updatedAt = parseTime(it.updatedAt, System.currentTimeMillis())
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     /**
      * Odwołuje wezwanie pomocy. W spływie na serwerze najpierw odwołuje je serwer (tylko autor może to
      * zrobić) i dopiero potem telefon; w spływie lokalnym wystarczy zmiana na telefonie.
@@ -800,6 +846,19 @@ class SyncRepository(
             guarded {
                 api().patchCheckIn(serverTripId, serverId, CheckInHelpRequest(false))
                 tripDao.setCheckInHelp(checkInId, false)
+                SyncOutcome(true, "")
+            }
+        }
+    }
+
+    /** Odwołuje własne wezwanie pomocy rozpoznane po id zameldowania na serwerze (z listy pozycji). */
+    suspend fun cancelHelpByServerId(localTripId: Long, serverCheckInId: Long): SyncOutcome {
+        if (!enabled) return notEnabled
+        return mutex.withLock {
+            guarded {
+                val serverTripId = tripDao.getTrip(localTripId)?.serverId ?: return@guarded disabled
+                api().patchCheckIn(serverTripId, serverCheckInId, CheckInHelpRequest(false))
+                tripDao.findCheckInByServerId(serverCheckInId)?.let { tripDao.setCheckInHelp(it.id, false) }
                 SyncOutcome(true, "")
             }
         }
