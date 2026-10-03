@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -21,6 +22,8 @@ type state struct {
 	Participants []Participant `json:"participants"`
 	Gear         []GearItem    `json:"gear"`
 	CheckIns     []CheckIn     `json:"check_ins"`
+	Users        []User        `json:"users"`
+	Sessions     []Session     `json:"sessions"`
 }
 
 // Store trzyma dane w pamięci i po każdej zmianie zapisuje je atomowo do pliku JSON.
@@ -329,13 +332,114 @@ func (st *Store) AddParticipant(tripID int64, p Participant) (Participant, error
 	return out, err
 }
 
-func (st *Store) DeleteParticipant(tripID, id int64) error {
-	return st.mutate(func(s *state) error {
-		for i, p := range s.Participants {
-			if p.ID == id && p.TripID == tripID {
-				s.Participants = append(s.Participants[:i], s.Participants[i+1:]...)
-				return nil
+// Access opisuje relację użytkownika do spływu.
+type Access struct {
+	Exists        bool
+	Owner         bool
+	Member        bool
+	ParticipantID int64
+}
+
+func accessIn(s *state, tripID int64, username string) Access {
+	var a Access
+	for _, t := range s.Trips {
+		if t.ID == tripID {
+			a.Exists = true
+			a.Owner = strings.EqualFold(t.Organizer, username)
+			break
+		}
+	}
+	if !a.Exists {
+		return a
+	}
+	for _, p := range s.Participants {
+		if p.TripID == tripID && strings.EqualFold(p.Name, username) {
+			a.Member = true
+			a.ParticipantID = p.ID
+			break
+		}
+	}
+	return a
+}
+
+func (st *Store) Access(tripID int64, username string) Access {
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	return accessIn(&st.s, tripID, username)
+}
+
+// JoinTrip dodaje użytkownika do spływu albo (gdy już w nim jest) aktualizuje jego dane.
+func (st *Store) JoinTrip(tripID int64, username string, carSeats int, needsKayak bool) (out Participant, created bool, err error) {
+	err = st.mutate(func(s *state) error {
+		a := accessIn(s, tripID, username)
+		if !a.Exists {
+			return errNotFound
+		}
+		if a.Member {
+			for i := range s.Participants {
+				if s.Participants[i].ID == a.ParticipantID {
+					s.Participants[i].CarSeats = carSeats
+					s.Participants[i].NeedsKayak = needsKayak
+					out = s.Participants[i]
+					return nil
+				}
 			}
+		}
+		out = Participant{
+			ID: st.nextIDIn(s), TripID: tripID, Name: username, CarSeats: carSeats, NeedsKayak: needsKayak,
+		}
+		s.Participants = append(s.Participants, out)
+		created = true
+		return nil
+	})
+	return
+}
+
+// ParticipantNames zwraca nazwy uczestników spływu.
+func (st *Store) ParticipantNames(tripID int64) []string {
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	var names []string
+	for _, p := range st.s.Participants {
+		if p.TripID == tripID {
+			names = append(names, p.Name)
+		}
+	}
+	return names
+}
+
+var (
+	errForbidden = errors.New("brak uprawnień")
+	errOwnerLeft = errors.New("organizator nie może opuścić spływu")
+)
+
+// LeaveTrip usuwa uczestnika o danym id, ale tylko jeśli jest nim wskazany użytkownik.
+// Organizator nie może opuścić własnego spływu (może go tylko usunąć).
+func (st *Store) LeaveTrip(tripID, participantID int64, username string) error {
+	return st.mutate(func(s *state) error {
+		a := accessIn(s, tripID, username)
+		if !a.Exists {
+			return errNotFound
+		}
+		for i, p := range s.Participants {
+			if p.ID != participantID || p.TripID != tripID {
+				continue
+			}
+			if !strings.EqualFold(p.Name, username) {
+				return errForbidden
+			}
+			if a.Owner {
+				return errOwnerLeft
+			}
+			s.Participants = append(s.Participants[:i], s.Participants[i+1:]...)
+			// Pozycje przypisane do osoby, która odeszła, wracają do puli.
+			for j := range s.Gear {
+				if s.Gear[j].TripID == tripID && s.Gear[j].AssignedTo != nil &&
+					strings.EqualFold(*s.Gear[j].AssignedTo, p.Name) {
+					s.Gear[j].AssignedTo = nil
+				}
+			}
+			return nil
 		}
 		return errNotFound
 	})

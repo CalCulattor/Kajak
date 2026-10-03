@@ -167,6 +167,16 @@ interface TripDao {
     @Update
     suspend fun updateTrip(trip: TripEntity)
 
+    @Query("SELECT id FROM trips WHERE serverId IS NOT NULL")
+    suspend fun sharedTripIds(): List<Long>
+
+    /** Usuwa lokalne kopie spływów z serwera (np. po zmianie konta); spływy tylko lokalne zostają. */
+    @Query("DELETE FROM trips WHERE serverId IS NOT NULL")
+    suspend fun deleteSharedTrips()
+
+    @Query("UPDATE participants SET carSeats = :carSeats, needsKayak = :needsKayak WHERE id = :id")
+    suspend fun updateParticipantData(id: Long, carSeats: Int, needsKayak: Boolean)
+
     @Query("SELECT * FROM participants WHERE tripId = :tripId ORDER BY id")
     suspend fun participantsOf(tripId: Long): List<ParticipantEntity>
 

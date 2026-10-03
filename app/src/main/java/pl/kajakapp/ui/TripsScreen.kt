@@ -31,12 +31,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -55,15 +58,30 @@ import pl.kajakapp.util.Fmt
 fun TripsScreen(onOpenTrip: (Long) -> Unit, onOpenSettings: () -> Unit) {
     val container = rememberContainer()
     val vm: TripsViewModel = viewModel(
-        factory = VmFactory { TripsViewModel(container.trips, container.rivers, container.sync) }
+        factory = VmFactory { TripsViewModel(container.trips, container.rivers, container.sync, container.settings) }
     )
     val items by vm.items.collectAsStateWithLifecycle()
     val sections by vm.sections.collectAsStateWithLifecycle()
     val join by vm.join.collectAsStateWithLifecycle()
+    val username by vm.username.collectAsStateWithLifecycle()
+    val message by vm.message.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
     var showCreate by remember { mutableStateOf(false) }
+
+    // Spływy usunięte przez organizatora lub opuszczone znikają z telefonu przy wejściu na listę.
+    LaunchedEffect(Unit) { vm.refresh() }
+
+    LaunchedEffect(message) {
+        val text = message
+        if (text != null) {
+            snackbar.showSnackbar(text)
+            vm.consumeMessage()
+        }
+    }
 
     Scaffold(
         contentWindowInsets = NoInsets,
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text("Spływy") },
@@ -130,6 +148,7 @@ fun TripsScreen(onOpenTrip: (Long) -> Unit, onOpenSettings: () -> Unit) {
 
     if (showCreate) {
         CreateTripDialog(
+            accountName = username,
             sections = sections,
             onDismiss = { showCreate = false },
             onCreate = { title, sectionId, date, overnight, organizer ->
@@ -188,6 +207,7 @@ private fun JoinTripDialog(
 
 @Composable
 private fun CreateTripDialog(
+    accountName: String?,
     sections: List<SectionWithRiver>,
     onDismiss: () -> Unit,
     onCreate: (title: String, sectionId: Long?, dateUtcMillis: Long, overnight: Boolean, organizer: String) -> Unit
@@ -214,12 +234,17 @@ private fun CreateTripDialog(
                     label = { Text("Nazwa spływu") },
                     singleLine = true
                 )
-                OutlinedTextField(
-                    value = organizer,
-                    onValueChange = { if (it.length <= 80) organizer = it },
-                    label = { Text("Twoje imię (organizator)") },
-                    singleLine = true
-                )
+                if (accountName != null) {
+                    // Zalogowany użytkownik jest organizatorem pod nazwą swojego konta.
+                    Text("Organizator: $accountName", fontWeight = FontWeight.Medium)
+                } else {
+                    OutlinedTextField(
+                        value = organizer,
+                        onValueChange = { if (it.length <= 80) organizer = it },
+                        label = { Text("Twoje imię (organizator)") },
+                        singleLine = true
+                    )
+                }
                 ChoiceButton(
                     selectedLabel = selectedSectionLabel,
                     options = listOf<SectionWithRiver?>(null) + sections,
@@ -239,7 +264,7 @@ private fun CreateTripDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = title.isNotBlank() && organizer.isNotBlank(),
+                enabled = title.isNotBlank() && (accountName != null || organizer.isNotBlank()),
                 onClick = { onCreate(title, sectionId, dateMillis, overnight, organizer) }
             ) { Text("Utwórz") }
         },

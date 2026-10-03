@@ -26,16 +26,29 @@ const (
 var dateRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
 type Server struct {
-	store *Store
+	store         *Store
+	loginLimit    *limiter // nieudane logowania na nazwę użytkownika
+	registerLimit *limiter // rejestracje ogółem (ochrona przed zalewaniem pliku danych)
 }
 
-func NewServer(store *Store) *Server { return &Server{store: store} }
+func NewServer(store *Store) *Server {
+	return &Server{
+		store:         store,
+		loginLimit:    newLimiter(8, 10*time.Minute),
+		registerLimit: newLimiter(30, time.Hour),
+	}
+}
 
 // Handler zwraca router z wszystkimi trasami API.
 func (srv *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/health", srv.health)
+
+	mux.HandleFunc("POST /api/register", srv.register)
+	mux.HandleFunc("POST /api/login", srv.login)
+	mux.HandleFunc("POST /api/logout", srv.logout)
+	mux.HandleFunc("GET /api/me", srv.me)
 
 	mux.HandleFunc("GET /api/routes", srv.listRoutes)
 	mux.HandleFunc("POST /api/routes", srv.createRoute)
@@ -84,6 +97,14 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 func storeError(w http.ResponseWriter, err error) {
 	if errors.Is(err, errNotFound) {
 		writeError(w, http.StatusNotFound, "nie znaleziono")
+		return
+	}
+	if errors.Is(err, errOwnerLeft) {
+		writeError(w, http.StatusForbidden, "organizator nie może opuścić spływu – może go tylko usunąć")
+		return
+	}
+	if errors.Is(err, errForbidden) {
+		writeError(w, http.StatusForbidden, "możesz usunąć tylko siebie")
 		return
 	}
 	log.Printf("błąd magazynu: %v", err)
@@ -185,6 +206,9 @@ type createRouteRequest struct {
 }
 
 func (srv *Server) createRoute(w http.ResponseWriter, r *http.Request) {
+	if _, ok := srv.currentUser(w, r); !ok {
+		return
+	}
 	var req createRouteRequest
 	if !decode(w, r, &req) {
 		return
@@ -262,6 +286,9 @@ type createObstacleRequest struct {
 }
 
 func (srv *Server) createObstacle(w http.ResponseWriter, r *http.Request) {
+	if _, ok := srv.currentUser(w, r); !ok {
+		return
+	}
 	key := r.PathValue("key")
 	if !sectionKeyRe.MatchString(key) {
 		writeError(w, http.StatusBadRequest, "niepoprawny klucz odcinka")
@@ -314,6 +341,9 @@ func (srv *Server) createObstacle(w http.ResponseWriter, r *http.Request) {
 
 func (srv *Server) voteObstacle(confirm bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := srv.currentUser(w, r); !ok {
+			return
+		}
 		id, ok := pathID(w, r, "id")
 		if !ok {
 			return
@@ -329,34 +359,55 @@ func (srv *Server) voteObstacle(confirm bool) http.HandlerFunc {
 
 // ---------------------------------------------------------------- spływy
 
+// Organizatorem spływu jest zawsze zalogowany użytkownik, który go tworzy.
 type createTripRequest struct {
 	Title      string  `json:"title"`
 	SectionKey *string `json:"section_key"`
 	StartDate  string  `json:"start_date"`
 	Overnight  bool    `json:"overnight"`
-	Organizer  string  `json:"organizer"`
 	Notes      string  `json:"notes"`
 }
 
+// requireMember wymaga zalogowania i bycia uczestnikiem spływu (organizator jest uczestnikiem).
+func (srv *Server) requireMember(w http.ResponseWriter, r *http.Request, tripID int64) (string, bool) {
+	user, ok := srv.currentUser(w, r)
+	if !ok {
+		return "", false
+	}
+	a := srv.store.Access(tripID, user)
+	switch {
+	case !a.Exists:
+		writeError(w, http.StatusNotFound, "nie znaleziono")
+	case !a.Member:
+		writeError(w, http.StatusForbidden, "nie jesteś uczestnikiem tego spływu")
+	default:
+		return user, true
+	}
+	return "", false
+}
+
 func (srv *Server) listTrips(w http.ResponseWriter, r *http.Request) {
+	if _, ok := srv.currentUser(w, r); !ok {
+		return
+	}
 	writeJSON(w, http.StatusOK, srv.store.ListTrips())
 }
 
 func (srv *Server) createTrip(w http.ResponseWriter, r *http.Request) {
+	user, ok := srv.currentUser(w, r)
+	if !ok {
+		return
+	}
 	var req createTripRequest
 	if !decode(w, r, &req) {
 		return
 	}
 	req.Title = strings.TrimSpace(req.Title)
-	req.Organizer = strings.TrimSpace(req.Organizer)
 	req.Notes = strings.TrimSpace(req.Notes)
 
 	switch {
 	case req.Title == "" || !validText(req.Title, maxTitleRunes):
 		writeError(w, http.StatusBadRequest, "title jest wymagany (do 120 znaków)")
-		return
-	case req.Organizer == "" || !validText(req.Organizer, maxNameRunes):
-		writeError(w, http.StatusBadRequest, "organizer jest wymagany (do 80 znaków)")
 		return
 	case !validText(req.Notes, maxTextRunes):
 		writeError(w, http.StatusBadRequest, "notes są za długie")
@@ -379,7 +430,7 @@ func (srv *Server) createTrip(w http.ResponseWriter, r *http.Request) {
 		SectionKey: req.SectionKey,
 		StartDate:  req.StartDate,
 		Overnight:  req.Overnight,
-		Organizer:  req.Organizer,
+		Organizer:  user,
 		Notes:      req.Notes,
 	})
 	if err != nil {
@@ -387,7 +438,7 @@ func (srv *Server) createTrip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Organizator jest pierwszym uczestnikiem, tak jak w aplikacji.
-	if _, err := srv.store.AddParticipant(t.ID, Participant{Name: req.Organizer}); err != nil {
+	if _, err := srv.store.AddParticipant(t.ID, Participant{Name: user}); err != nil {
 		storeError(w, err)
 		return
 	}
@@ -397,6 +448,9 @@ func (srv *Server) createTrip(w http.ResponseWriter, r *http.Request) {
 func (srv *Server) getTrip(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r, "id")
 	if !ok {
+		return
+	}
+	if _, ok := srv.requireMember(w, r, id); !ok {
 		return
 	}
 	d, err := srv.store.GetTrip(id)
@@ -412,6 +466,18 @@ func (srv *Server) deleteTrip(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	user, ok := srv.currentUser(w, r)
+	if !ok {
+		return
+	}
+	switch a := srv.store.Access(id, user); {
+	case !a.Exists:
+		writeError(w, http.StatusNotFound, "nie znaleziono")
+		return
+	case !a.Owner:
+		writeError(w, http.StatusForbidden, "spływ może usunąć tylko jego organizator")
+		return
+	}
 	if err := srv.store.DeleteTrip(id); err != nil {
 		storeError(w, err)
 		return
@@ -421,6 +487,8 @@ func (srv *Server) deleteTrip(w http.ResponseWriter, r *http.Request) {
 
 // ---------------------------------------------------------------- uczestnicy
 
+// Uczestnika można dodać tylko jako siebie: nazwa pochodzi z konta. Pole name jest
+// opcjonalne i musi być zgodne z kontem (inaczej 403). Powtórne wywołanie aktualizuje dane.
 type createParticipantRequest struct {
 	Name       string `json:"name"`
 	CarSeats   int    `json:"car_seats"`
@@ -432,27 +500,32 @@ func (srv *Server) createParticipant(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	user, ok := srv.currentUser(w, r)
+	if !ok {
+		return
+	}
 	var req createParticipantRequest
 	if !decode(w, r, &req) {
 		return
 	}
-	req.Name = strings.TrimSpace(req.Name)
-	if req.Name == "" || !validText(req.Name, maxNameRunes) {
-		writeError(w, http.StatusBadRequest, "name jest wymagane (do 80 znaków)")
+	if name := strings.TrimSpace(req.Name); name != "" && !strings.EqualFold(name, user) {
+		writeError(w, http.StatusForbidden, "możesz dodać tylko siebie")
 		return
 	}
 	if req.CarSeats < 0 || req.CarSeats > maxCarSeats {
 		writeError(w, http.StatusBadRequest, "car_seats musi być w zakresie 0-99")
 		return
 	}
-	p, err := srv.store.AddParticipant(tripID, Participant{
-		Name: req.Name, CarSeats: req.CarSeats, NeedsKayak: req.NeedsKayak,
-	})
+	p, created, err := srv.store.JoinTrip(tripID, user, req.CarSeats, req.NeedsKayak)
 	if err != nil {
 		storeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, p)
+	status := http.StatusCreated
+	if !created {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, p)
 }
 
 func (srv *Server) deleteParticipant(w http.ResponseWriter, r *http.Request) {
@@ -464,7 +537,11 @@ func (srv *Server) deleteParticipant(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := srv.store.DeleteParticipant(tripID, pid); err != nil {
+	user, ok := srv.currentUser(w, r)
+	if !ok {
+		return
+	}
+	if err := srv.store.LeaveTrip(tripID, pid, user); err != nil {
 		storeError(w, err)
 		return
 	}
@@ -478,9 +555,26 @@ type createGearRequest struct {
 	AssignedTo *string `json:"assigned_to"`
 }
 
+// validAssignee sprawdza, że przypisanie wskazuje uczestnika spływu (albo brak przypisania).
+func (srv *Server) validAssignee(w http.ResponseWriter, tripID int64, assignee *string) (*string, bool) {
+	if assignee == nil {
+		return nil, true
+	}
+	for _, name := range srv.store.ParticipantNames(tripID) {
+		if strings.EqualFold(name, strings.TrimSpace(*assignee)) {
+			return &name, true
+		}
+	}
+	writeError(w, http.StatusBadRequest, "assigned_to musi być uczestnikiem spływu")
+	return nil, false
+}
+
 func (srv *Server) createGear(w http.ResponseWriter, r *http.Request) {
 	tripID, ok := pathID(w, r, "id")
 	if !ok {
+		return
+	}
+	if _, ok := srv.requireMember(w, r, tripID); !ok {
 		return
 	}
 	var req createGearRequest
@@ -496,7 +590,11 @@ func (srv *Server) createGear(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "assigned_to jest za długie")
 		return
 	}
-	g, err := srv.store.AddGear(tripID, GearItem{Name: req.Name, AssignedTo: req.AssignedTo})
+	assignee, ok := srv.validAssignee(w, tripID, req.AssignedTo)
+	if !ok {
+		return
+	}
+	g, err := srv.store.AddGear(tripID, GearItem{Name: req.Name, AssignedTo: assignee})
 	if err != nil {
 		storeError(w, err)
 		return
@@ -511,6 +609,9 @@ func (srv *Server) patchGear(w http.ResponseWriter, r *http.Request) {
 	}
 	gid, ok := pathID(w, r, "gid")
 	if !ok {
+		return
+	}
+	if _, ok := srv.requireMember(w, r, tripID); !ok {
 		return
 	}
 
@@ -548,6 +649,13 @@ func (srv *Server) patchGear(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "podaj assigned_to lub packed")
 		return
 	}
+	if patch.AssignedToSet {
+		assignee, ok := srv.validAssignee(w, tripID, patch.AssignedTo)
+		if !ok {
+			return
+		}
+		patch.AssignedTo = assignee
+	}
 	g, err := srv.store.UpdateGear(tripID, gid, patch)
 	if err != nil {
 		storeError(w, err)
@@ -563,6 +671,9 @@ func (srv *Server) deleteGear(w http.ResponseWriter, r *http.Request) {
 	}
 	gid, ok := pathID(w, r, "gid")
 	if !ok {
+		return
+	}
+	if _, ok := srv.requireMember(w, r, tripID); !ok {
 		return
 	}
 	if err := srv.store.DeleteGear(tripID, gid); err != nil {
@@ -588,6 +699,9 @@ func (srv *Server) listCheckIns(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if _, ok := srv.requireMember(w, r, tripID); !ok {
+		return
+	}
 	list, err := srv.store.ListCheckIns(tripID)
 	if err != nil {
 		storeError(w, err)
@@ -601,15 +715,21 @@ func (srv *Server) createCheckIn(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	user, ok := srv.requireMember(w, r, tripID)
+	if !ok {
+		return
+	}
 	var req createCheckInRequest
 	if !decode(w, r, &req) {
 		return
 	}
-	req.PersonName = strings.TrimSpace(req.PersonName)
-	switch {
-	case req.PersonName == "" || !validText(req.PersonName, maxNameRunes):
-		writeError(w, http.StatusBadRequest, "person_name jest wymagane (do 80 znaków)")
+	// Zameldować można tylko siebie; person_name jest opcjonalne i musi zgadzać się z kontem.
+	if name := strings.TrimSpace(req.PersonName); name != "" && !strings.EqualFold(name, user) {
+		writeError(w, http.StatusForbidden, "możesz zameldować tylko siebie")
 		return
+	}
+	req.PersonName = user
+	switch {
 	case req.Lat == nil || req.Lon == nil:
 		writeError(w, http.StatusBadRequest, "lat i lon są wymagane")
 		return

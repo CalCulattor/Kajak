@@ -124,7 +124,8 @@ class TripRepository(db: AppDatabase) {
         sectionId: Long?,
         startDateUtcMillis: Long,
         overnight: Boolean,
-        organizer: String
+        organizer: String,
+        ownerUsername: String?
     ): Long {
         val tripId = dao.insertTrip(
             TripEntity(
@@ -133,7 +134,8 @@ class TripRepository(db: AppDatabase) {
                 startDateUtcMillis = startDateUtcMillis,
                 overnight = overnight,
                 organizer = organizer.trim(),
-                notes = ""
+                notes = "",
+                ownerUsername = ownerUsername
             )
         )
         // Organizator jest pierwszym uczestnikiem.
@@ -157,6 +159,9 @@ class TripRepository(db: AppDatabase) {
             )
         )
     }
+
+    suspend fun updateParticipantData(id: Long, carSeats: Int, needsKayak: Boolean) =
+        dao.updateParticipantData(id, carSeats.coerceAtLeast(0), needsKayak)
 
     suspend fun removeParticipant(id: Long) = dao.deleteParticipant(id)
 

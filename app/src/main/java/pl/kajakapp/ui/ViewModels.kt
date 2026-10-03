@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import pl.kajakapp.data.ConditionsRepository
@@ -17,6 +18,7 @@ import pl.kajakapp.data.FetchStatus
 import pl.kajakapp.data.RefreshResult
 import pl.kajakapp.data.RemoteTripInfo
 import pl.kajakapp.data.RiverRepository
+import pl.kajakapp.data.ServerSettings
 import pl.kajakapp.data.SyncRepository
 import pl.kajakapp.data.TripRepository
 import pl.kajakapp.data.db.CheckInEntity
@@ -294,8 +296,29 @@ data class JoinUiState(
 class TripsViewModel(
     private val trips: TripRepository,
     rivers: RiverRepository,
-    private val sync: SyncRepository
+    private val sync: SyncRepository,
+    private val settings: ServerSettings
 ) : ViewModel() {
+
+    /** Zalogowany użytkownik albo null; jego nazwa jest używana jako imię organizatora. */
+    val username: StateFlow<String?> = settings.session
+        .map { it?.username }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), settings.session.value?.username)
+
+    private val _message = MutableStateFlow<String?>(null)
+    val message: StateFlow<String?> = _message
+
+    /** Po wejściu na listę sprawdza udostępnione spływy (usunięte lub opuszczone znikają z telefonu). */
+    fun refresh() {
+        viewModelScope.launch {
+            val result = sync.syncSharedTrips()
+            if (result.message.isNotEmpty()) _message.value = result.message
+        }
+    }
+
+    fun consumeMessage() {
+        _message.value = null
+    }
 
     /** null = okno zamknięte. */
     private val _join = MutableStateFlow<JoinUiState?>(null)
@@ -351,7 +374,16 @@ class TripsViewModel(
         onCreated: (Long) -> Unit
     ) {
         viewModelScope.launch {
-            val id = trips.createTrip(title, sectionId, startDateUtcMillis, overnight, organizer)
+            // Zalogowany użytkownik jest organizatorem pod nazwą swojego konta.
+            val account = settings.session.value?.username
+            val id = trips.createTrip(
+                title = title,
+                sectionId = sectionId,
+                startDateUtcMillis = startDateUtcMillis,
+                overnight = overnight,
+                organizer = account ?: organizer,
+                ownerUsername = account
+            )
             onCreated(id)
         }
     }
@@ -365,14 +397,19 @@ data class TripDetailState(
     val gear: List<GearItemEntity> = emptyList(),
     val checkIns: List<CheckInEntity> = emptyList(),
     val syncing: Boolean = false,
-    val message: String? = null
+    val message: String? = null,
+    /** Zalogowane konto (null = niezalogowany). */
+    val currentUser: String? = null,
+    /** true dla organizatora (a w spływie tylko lokalnym – zawsze). */
+    val isOwner: Boolean = true
 )
 
 class TripDetailViewModel(
     private val tripId: Long,
     private val trips: TripRepository,
     rivers: RiverRepository,
-    private val sync: SyncRepository
+    private val sync: SyncRepository,
+    settings: ServerSettings
 ) : ViewModel() {
 
     private val syncing = MutableStateFlow(false)
@@ -399,8 +436,13 @@ class TripDetailViewModel(
     }
 
     val state: StateFlow<TripDetailState> =
-        combine(data, syncing, message) { d, isSyncing, msg ->
-            d.copy(syncing = isSyncing, message = msg)
+        combine(data, syncing, message, settings.session) { d, isSyncing, msg, session ->
+            val user = session?.username
+            val trip = d.trip
+            val owner = trip != null &&
+                (trip.serverId == null ||
+                    (user != null && (trip.ownerUsername ?: trip.organizer).equals(user, ignoreCase = true)))
+            d.copy(syncing = isSyncing, message = msg, currentUser = user, isOwner = owner)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), TripDetailState())
 
     private val isShared: Boolean get() = state.value.trip?.serverId != null
@@ -505,10 +547,42 @@ class TripDetailViewModel(
         }
     }
 
+    /**
+     * Usuwa spływ z telefonu. Spływ udostępniony najpierw znika z serwera: organizator usuwa go
+     * dla wszystkich, pozostali uczestnicy tylko opuszczają spływ. Bez połączenia nic nie jest
+     * usuwane, żeby spływ nie wrócił po synchronizacji.
+     */
     fun deleteTrip(onDeleted: () -> Unit) {
+        viewModelScope.launch {
+            val result = sync.removeTripFromServer(tripId)
+            if (result.ok) {
+                trips.deleteTrip(tripId)
+                onDeleted()
+            } else {
+                message.value = result.message
+            }
+        }
+    }
+
+    /** Usuwa spływ tylko z tego telefonu (bez serwera) – wyjście awaryjne, gdy nie ma połączenia. */
+    fun deleteTripLocalOnly(onDeleted: () -> Unit) {
         viewModelScope.launch {
             trips.deleteTrip(tripId)
             onDeleted()
+        }
+    }
+
+    /** Zmienia własne dane uczestnika (miejsca w aucie, kajak) w spływie udostępnionym. */
+    fun updateMyData(carSeats: Int, needsKayak: Boolean) {
+        val current = state.value
+        val me = current.participants.firstOrNull { it.name.equals(current.currentUser, ignoreCase = true) }
+            ?: return
+        viewModelScope.launch {
+            trips.updateParticipantData(me.id, carSeats, needsKayak)
+            val result = sync.pushMyParticipant(tripId)
+            if (!result.ok && result.message.isNotEmpty()) {
+                message.value = "Zapisano na telefonie. ${result.message}"
+            }
         }
     }
 }

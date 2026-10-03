@@ -91,10 +91,30 @@ object Network {
     @Volatile
     private var serverCache: Pair<String, KajakServerApi>? = null
 
-    /** Klient serwera KajakApp dla podanego adresu bazowego (musi kończyć się znakiem „/”). */
-    fun server(baseUrl: String): KajakServerApi {
+    /**
+     * Klient serwera KajakApp dla podanego adresu bazowego (musi kończyć się znakiem „/”).
+     * [token] jest czytany przy każdym żądaniu, więc logowanie i wylogowanie działa bez
+     * odtwarzania klienta. Klient jest zapamiętywany (zakładamy jeden dostawca tokenu).
+     */
+    fun server(baseUrl: String, token: () -> String?): KajakServerApi {
         serverCache?.let { if (it.first == baseUrl) return it.second }
-        val api = retrofit(baseUrl).create(KajakServerApi::class.java)
+        val authClient = client.newBuilder()
+            .addInterceptor { chain ->
+                val value = token()
+                val request = if (value == null) {
+                    chain.request()
+                } else {
+                    chain.request().newBuilder().header("Authorization", "Bearer $value").build()
+                }
+                chain.proceed(request)
+            }
+            .build()
+        val api = Retrofit.Builder()
+            .baseUrl(baseUrl)
+            .client(authClient)
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .build()
+            .create(KajakServerApi::class.java)
         serverCache = baseUrl to api
         return api
     }

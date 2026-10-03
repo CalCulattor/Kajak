@@ -100,7 +100,6 @@ data class TripRequest(
     @SerialName("section_key") val sectionKey: String? = null,
     @SerialName("start_date") val startDate: String,
     val overnight: Boolean,
-    val organizer: String,
     val notes: String
 )
 
@@ -112,9 +111,9 @@ data class ParticipantDto(
     @SerialName("needs_kayak") val needsKayak: Boolean = false
 )
 
+/** Uczestnika można dodać tylko jako siebie – nazwę serwer bierze z konta, więc jej nie wysyłamy. */
 @Serializable
 data class ParticipantRequest(
-    val name: String,
     @SerialName("car_seats") val carSeats: Int,
     @SerialName("needs_kayak") val needsKayak: Boolean
 )
@@ -174,6 +173,15 @@ interface KajakServerApi {
     @GET("api/health")
     suspend fun health(): HealthDto
 
+    @POST("api/register")
+    suspend fun register(@Body body: AuthRequest): AuthResponse
+
+    @POST("api/login")
+    suspend fun login(@Body body: AuthRequest): AuthResponse
+
+    @POST("api/logout")
+    suspend fun logout(): Response<Unit>
+
     @GET("api/routes")
     suspend fun routes(): List<RouteDto>
 
@@ -204,6 +212,9 @@ interface KajakServerApi {
     @GET("api/trips/{id}")
     suspend fun trip(@Path("id") id: Long): TripDetailDto
 
+    @DELETE("api/trips/{id}")
+    suspend fun deleteTrip(@Path("id") id: Long): Response<Unit>
+
     @POST("api/trips/{id}/participants")
     suspend fun addParticipant(@Path("id") tripId: Long, @Body body: ParticipantRequest): ParticipantDto
 
@@ -226,3 +237,11 @@ interface KajakServerApi {
     @POST("api/trips/{id}/checkins")
     suspend fun addCheckIn(@Path("id") tripId: Long, @Body body: CheckInRequest): CheckInDto
 }
+
+// ---------------------------------------------------------------- konta
+
+@Serializable
+data class AuthRequest(val username: String, val password: String)
+
+@Serializable
+data class AuthResponse(val token: String, val username: String)

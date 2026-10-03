@@ -363,7 +363,7 @@ private fun ReportObstacleDialog(
                 )
                 OutlinedTextField(
                     value = description,
-                    onValueChange = { description = it },
+                    onValueChange = { if (it.length <= 1000) description = it },
                     label = { Text("Opis (np. po której stronie rzeki)") }
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {

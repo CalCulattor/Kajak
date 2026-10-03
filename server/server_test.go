@@ -6,10 +6,23 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
+
+const testPassword = "haslo-testowe-1"
+
+// defaultTokens: adres serwera testowego -> token domyślnego użytkownika „tester”,
+// który jest dopisywany do żądań wysyłanych przez call.
+var defaultTokens sync.Map
+
+func TestMain(m *testing.M) {
+	pbkdf2Iterations = 1000 // testy nie muszą płacić pełnego kosztu hasha
+	os.Exit(m.Run())
+}
 
 func newTestServer(t *testing.T, dataFile string) (*httptest.Server, *Store) {
 	t.Helper()
@@ -18,11 +31,46 @@ func newTestServer(t *testing.T, dataFile string) (*httptest.Server, *Store) {
 		t.Fatal(err)
 	}
 	ts := httptest.NewServer(NewServer(st).Handler())
-	t.Cleanup(ts.Close)
+	t.Cleanup(func() {
+		ts.Close()
+		defaultTokens.Delete(ts.URL)
+	})
+	defaultTokens.Store(ts.URL, authToken(t, ts.URL, "tester"))
 	return ts, st
 }
 
+// authToken loguje użytkownika (a gdy konta nie ma – rejestruje je) i zwraca token.
+func authToken(t *testing.T, baseURL, username string) string {
+	t.Helper()
+	creds := map[string]any{"username": username, "password": testPassword}
+	code, body := callAs(t, "", "POST", baseURL+"/api/login", creds)
+	if code == http.StatusUnauthorized {
+		code, body = callAs(t, "", "POST", baseURL+"/api/register", creds)
+	}
+	if code != 200 && code != 201 {
+		t.Fatalf("logowanie/rejestracja %s: %d %s", username, code, body)
+	}
+	var resp authResponse
+	decodeInto(t, body, &resp)
+	return resp.Token
+}
+
+// call wysyła żądanie jako domyślny użytkownik „tester”.
 func call(t *testing.T, method, url string, body any) (int, []byte) {
+	t.Helper()
+	token := ""
+	defaultTokens.Range(func(k, v any) bool {
+		if strings.HasPrefix(url, k.(string)) {
+			token = v.(string)
+			return false
+		}
+		return true
+	})
+	return callAs(t, token, method, url, body)
+}
+
+// callAs wysyła żądanie z podanym tokenem (pusty = bez logowania).
+func callAs(t *testing.T, token, method, url string, body any) (int, []byte) {
 	t.Helper()
 	var rd io.Reader
 	switch b := body.(type) {
@@ -39,6 +87,9 @@ func call(t *testing.T, method, url string, body any) (int, []byte) {
 	req, err := http.NewRequest(method, url, rd)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -183,7 +234,7 @@ func TestTripFlow(t *testing.T) {
 
 	code, body := call(t, "POST", ts.URL+"/api/trips", map[string]any{
 		"title": "Weekend na Krutyni", "section_key": "krutynia",
-		"start_date": "2026-10-10", "overnight": true, "organizer": "Marcel",
+		"start_date": "2026-10-10", "overnight": true,
 	})
 	if code != 201 {
 		t.Fatalf("create trip: %d %s", code, body)
@@ -192,7 +243,9 @@ func TestTripFlow(t *testing.T) {
 	decodeInto(t, body, &trip)
 	tripURL := ts.URL + "/api/trips/" + itoa(trip.ID)
 
-	code, body = call(t, "POST", tripURL+"/participants", map[string]any{"name": "Ola", "car_seats": 4, "needs_kayak": true})
+	// Ola dołącza sama jako zalogowana użytkowniczka.
+	olaToken := authToken(t, ts.URL, "Ola")
+	code, body = callAs(t, olaToken, "POST", tripURL+"/participants", map[string]any{"car_seats": 4, "needs_kayak": true})
 	if code != 201 {
 		t.Fatalf("participant: %d %s", code, body)
 	}
@@ -219,7 +272,7 @@ func TestTripFlow(t *testing.T) {
 		t.Errorf("pusty patch powinien dać 400, jest %d", code)
 	}
 
-	code, body = call(t, "POST", tripURL+"/checkins", map[string]any{
+	code, body = callAs(t, olaToken, "POST", tripURL+"/checkins", map[string]any{
 		"client_id": "c1", "person_name": "Ola", "lat": 53.77, "lon": 21.5, "needs_help": true,
 		"fix_at": "2026-10-10T09:00:00Z",
 	})
@@ -253,34 +306,34 @@ func TestTripFlow(t *testing.T) {
 func TestTripAndCheckInValidation(t *testing.T) {
 	ts, _ := newTestServer(t, "")
 	code, _ := call(t, "POST", ts.URL+"/api/trips", map[string]any{
-		"title": "T", "start_date": "2026-02-30", "organizer": "M",
+		"title": "T", "start_date": "2026-02-30",
 	})
 	if code != 400 {
 		t.Errorf("nieistniejąca data: %d", code)
 	}
 	code, _ = call(t, "POST", ts.URL+"/api/trips", map[string]any{
-		"title": " ", "start_date": "2026-10-10", "organizer": "M",
+		"title": " ", "start_date": "2026-10-10",
 	})
 	if code != 400 {
 		t.Errorf("pusty tytuł: %d", code)
 	}
 
 	_, body := call(t, "POST", ts.URL+"/api/trips", map[string]any{
-		"title": "T", "start_date": "2026-10-10", "organizer": "M",
+		"title": "T", "start_date": "2026-10-10",
 	})
 	var trip Trip
 	decodeInto(t, body, &trip)
 	url := ts.URL + "/api/trips/" + itoa(trip.ID)
 
-	code, _ = call(t, "POST", url+"/checkins", map[string]any{"person_name": "M", "lat": 10.0})
+	code, _ = call(t, "POST", url+"/checkins", map[string]any{"person_name": "tester", "lat": 10.0})
 	if code != 400 {
 		t.Errorf("brak lon: %d", code)
 	}
-	code, _ = call(t, "POST", url+"/participants", map[string]any{"name": "X", "car_seats": -1})
+	code, _ = call(t, "POST", url+"/participants", map[string]any{"car_seats": -1})
 	if code != 400 {
 		t.Errorf("ujemne miejsca: %d", code)
 	}
-	code, _ = call(t, "POST", ts.URL+"/api/trips/999/participants", map[string]any{"name": "X"})
+	code, _ = call(t, "POST", ts.URL+"/api/trips/999/participants", map[string]any{"car_seats": 1})
 	if code != 404 {
 		t.Errorf("nieistniejący spływ: %d", code)
 	}

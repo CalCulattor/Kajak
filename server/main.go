@@ -47,7 +47,7 @@ func run(args []string) error {
 
 	log.Printf("serwer KajakApp: http://%s (dane: %s)", ln.Addr(), cfg.DataFile)
 	if !cfg.IsLoopback() {
-		log.Printf("UWAGA: host %q nie jest adresem lokalnym, a API nie ma uwierzytelniania", cfg.Host)
+		log.Printf("UWAGA: host %q nie jest adresem lokalnym; używaj HTTPS (np. reverse proxy z TLS), bo hasła i tokeny idą otwartym tekstem", cfg.Host)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

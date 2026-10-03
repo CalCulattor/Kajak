@@ -31,14 +31,15 @@ Inny plik konfiguracji wskażesz flagą `-config ścieżka.json`. Port musi mie�
 a gdy jest zajęty, serwer kończy działanie z czytelnym komunikatem.
 
 Domyślnie serwer słucha tylko na `127.0.0.1`, więc jest niewidoczny z sieci. Jeśli ustawisz inny host
-(np. `0.0.0.0`, żeby połączyć się z telefonu w tej samej sieci), pamiętaj, że **API nie ma uwierzytelniania**
-i serwer ostrzeże o tym w logu.
+(np. `0.0.0.0`, żeby połączyć się z telefonu w tej samej sieci), pamiętaj, że hasła i tokeny
+przechodzą wtedy przez sieć jako zwykły tekst – **do użytku poza localhostem postaw serwer za HTTPS**
+(reverse proxy z TLS). Serwer ostrzeże o tym w logu.
 
 ## Łączenie z emulatora Androida
 
 Emulator widzi komputer pod adresem `10.0.2.2`, a nie `localhost`. Adres serwera w aplikacji
-to więc `http://10.0.2.2:8080`. Ruch HTTP (bez TLS) wymaga na Androidzie 9+ zgody w manifeście
-(`android:usesCleartextTraffic="true"` lub konfiguracja bezpieczeństwa sieci).
+to więc `http://10.0.2.2:8080`. Aplikacja ma konfigurację sieci (`network_security_config.xml`), która
+dopuszcza HTTP bez szyfrowania tylko dla `10.0.2.2` i `localhost`; wszystko inne musi być HTTPS.
 
 ## API
 
@@ -46,18 +47,26 @@ Wszystkie odpowiedzi to JSON. Błędy mają postać `{"error": "..."}`.
 
 | Metoda i ścieżka | Opis |
 | --- | --- |
-| `GET /api/health` | Sprawdzenie, czy serwer działa. |
+| `GET /api/health` | Sprawdzenie, czy serwer działa (bez logowania). |
+| `POST /api/register` | Nowe konto: `username` (3–24 znaki: a-z, A-Z, 0-9, `_ . -`; unikalne bez względu na wielkość liter) i `password` (8–128 znaków). Zwraca `{"token","username"}`; 409 gdy nazwa zajęta. |
+| `POST /api/login` | Logowanie tym samym ciałem. 401 przy złych danych, 429 po 8 nieudanych próbach na konto (blokada na 10 min). |
+| `POST /api/logout`, `GET /api/me` | Unieważnienie bieżącego tokenu i sprawdzenie, kim jestem. |
 | `GET /api/routes`, `POST /api/routes` | Lista tras i dodanie trasy (`river_name`, `region`, `river_type` = `LOWLAND`/`MOUNTAIN`, `name`, `length_km`, `difficulty` = `FLAT`/`WW1`…`WW5`, `put_in`, `take_out`, `lat`, `lon`, `description`, opcjonalnie `station_name`, `client_id`). Serwer nadaje stabilny `key` (np. `drawa-drawno-zlocieniec-7`), którego używają przeszkody i spływy. |
 | `GET /api/routes/{key}` | Pojedyncza trasa. |
 | `GET /api/sections/{key}/obstacles` | Aktywne przeszkody odcinka (`?include_inactive=true` pokazuje też usunięte). |
 | `POST /api/sections/{key}/obstacles` | Zgłoszenie przeszkody: `type`, `description`, opcjonalnie `lat` i `lon` oraz `client_id`. |
 | `POST /api/obstacles/{id}/confirm` | „Nadal tu jest”. |
 | `POST /api/obstacles/{id}/remove-vote` | „Już usunięte”. |
-| `GET /api/trips`, `POST /api/trips` | Lista i tworzenie spływów (`title`, `start_date` jako `RRRR-MM-DD`, `organizer`, opcjonalnie `section_key`, `overnight`, `notes`). Organizator zostaje pierwszym uczestnikiem. |
-| `GET /api/trips/{id}`, `DELETE /api/trips/{id}` | Szczegóły (z uczestnikami, wyposażeniem, zameldowaniami) i usunięcie spływu z całą zawartością. |
-| `POST /api/trips/{id}/participants`, `DELETE .../participants/{pid}` | Uczestnicy: `name`, `car_seats`, `needs_kayak`. |
-| `POST /api/trips/{id}/gear`, `PATCH`, `DELETE .../gear/{gid}` | Wyposażenie. `PATCH` przyjmuje `packed` i/lub `assigned_to` (`null` czyści przypisanie). |
-| `GET /api/trips/{id}/checkins`, `POST` | Zameldowania: `person_name`, `lat`, `lon`, opcjonalnie `fix_at`, `needs_help`, `client_id`. Lista jest od najnowszego. |
+| `GET /api/trips`, `POST /api/trips` | Lista (każdy zalogowany) i tworzenie spływów (`title`, `start_date` jako `RRRR-MM-DD`, opcjonalnie `section_key`, `overnight`, `notes`). Organizatorem jest zawsze zalogowany użytkownik i zostaje pierwszym uczestnikiem. |
+| `GET /api/trips/{id}`, `DELETE /api/trips/{id}` | Szczegóły (z uczestnikami, wyposażeniem, zameldowaniami) – tylko dla uczestników (inni dostają 403). Usunąć spływ z całą zawartością może tylko organizator. |
+| `POST /api/trips/{id}/participants`, `DELETE .../participants/{pid}` | Uczestnicy. `POST` dodaje **zawsze zalogowanego użytkownika** (`car_seats`, `needs_kayak`; opcjonalne `name` musi być zgodne z kontem, inaczej 403); ponowne wywołanie aktualizuje jego dane. `DELETE` pozwala usunąć tylko siebie; organizator nie może opuścić własnego spływu (może go usunąć). |
+| `POST /api/trips/{id}/gear`, `PATCH`, `DELETE .../gear/{gid}` | Wyposażenie (tylko uczestnicy; `assigned_to` musi być uczestnikiem spływu). `PATCH` przyjmuje `packed` i/lub `assigned_to` (`null` czyści przypisanie). |
+| `GET /api/trips/{id}/checkins`, `POST` | Zameldowania (tylko uczestnicy; można zameldować tylko siebie): `lat`, `lon`, opcjonalnie `fix_at`, `needs_help`, `client_id` (`person_name` opcjonalne, musi zgadzać się z kontem). Lista jest od najnowszego. |
+
+Wymagają logowania (nagłówek `Authorization: Bearer <token>`): wszystkie zapisy (trasy, przeszkody, głosy),
+lista i szczegóły spływów. Publiczne są tylko `GET` tras i przeszkód oraz `health`. Hasła są
+przechowywane jako PBKDF2-HMAC-SHA256 z solą (600 000 iteracji), tokeny jako skrót SHA-256; sesja
+ważna 90 dni.
 
 Typy przeszkód: `STRAINER`, `WEIR`, `LOW_BRIDGE`, `ROCK_SIEVE`, `PORTAGE`, `OTHER`.
 Reguły są takie jak w aplikacji: przeszkoda przestaje być aktywna, gdy ma co najmniej 2 zgłoszenia usunięcia
@@ -71,21 +80,24 @@ i więcej niż potwierdzeń.
 ```
 curl http://127.0.0.1:8080/api/health
 
+# rejestracja i zapamiętanie tokenu
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/register -H 'Content-Type: application/json' \
+  -d '{"username":"marcel","password":"tajne-haslo-1"}' | sed 's/.*"token":"\([^"]*\)".*/\1/')
+
 curl -X POST http://127.0.0.1:8080/api/sections/dunajec-przelom/obstacles \
-  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"type":"STRAINER","description":"drzewo przy lewym brzegu","lat":49.4,"lon":20.4}'
 
 curl -X POST http://127.0.0.1:8080/api/trips \
-  -H 'Content-Type: application/json' \
-  -d '{"title":"Weekend na Krutyni","section_key":"krutynia","start_date":"2026-10-10","overnight":true,"organizer":"Marcel"}'
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"title":"Weekend na Krutyni","section_key":"krutynia","start_date":"2026-10-10","overnight":true}'
 ```
 
 ## Czego jeszcze brakuje
 
-- **Aplikacja nie rozmawia jeszcze z tym serwerem.** Trzeba dopisać klienta HTTP i synchronizację
-  rekordów oznaczonych `pendingSync`.
-- **Stabilne klucze odcinków.** Serwer identyfikuje odcinki kluczem tekstowym (`section_key`), a w aplikacji
-  odcinki mają dziś lokalne numery z bazy telefonu, różne na różnych urządzeniach. Do synchronizacji potrzebne
-  jest pole z kluczem w `SectionEntity` i w `SeedData.kt`.
-- Uwierzytelnianie, konta i limit głosów na osobę.
-- Prawdziwa baza danych zamiast pliku JSON oraz TLS, zanim serwer wyjdzie poza `localhost`.
+- Odzyskiwania hasła (konta nie mają e-maila), zmiany hasła i usuwania konta.
+- Limitu głosów na osobę przy przeszkodach (jedno konto może głosować wielokrotnie).
+- Dostępu organizatora do usuwania innych uczestników.
+- Prawdziwej bazy danych zamiast pliku JSON oraz własnego TLS (na razie za reverse proxy).
+- **Uwaga przy aktualizacji:** dane z wersji bez kont (`data.json` ze spływami, których organizatorem
+  jest dowolny tekst) nie pasują do nowego modelu. Przed wdrożeniem usuń stary `data.json`.
