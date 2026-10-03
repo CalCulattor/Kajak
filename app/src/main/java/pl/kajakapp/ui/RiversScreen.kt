@@ -14,7 +14,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -74,9 +73,6 @@ fun RiversScreen(
                     title = { Text("Rzeki") },
                     windowInsets = NoInsets,
                     actions = {
-                        IconButton(onClick = { vm.refresh(manual = true) }, enabled = !syncing) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Synchronizuj trasy z serwerem")
-                        }
                         IconButton(onClick = onOpenSettings) {
                             Icon(Icons.Default.Settings, contentDescription = "Ustawienia serwera")
                         }
@@ -113,7 +109,7 @@ fun RiversScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                "${item.river.type.label} · ${item.river.region}",
+                                "${item.river.type.label}\t${item.river.region}",
                                 style = MaterialTheme.typography.bodySmall
                             )
                             Text(item.river.description, style = MaterialTheme.typography.bodyMedium)
@@ -141,7 +137,7 @@ fun RiversScreen(
                                         Text(
                                             String.format(
                                                 Locale.forLanguageTag("pl-PL"),
-                                                "%.1f km · %s",
+                                                "%.1f km\t%s",
                                                 section.lengthKm,
                                                 section.difficulty.label
                                             ),

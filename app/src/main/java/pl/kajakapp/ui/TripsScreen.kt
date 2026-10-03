@@ -22,6 +22,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -87,7 +89,6 @@ fun TripsScreen(onOpenTrip: (Long) -> Unit, onOpenSettings: () -> Unit) {
                 title = { Text("Spływy") },
                 windowInsets = NoInsets,
                 actions = {
-                    TextButton(onClick = vm::openJoin) { Text("Dołącz") }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Ustawienia serwera")
                     }
@@ -95,8 +96,27 @@ fun TripsScreen(onOpenTrip: (Long) -> Unit, onOpenSettings: () -> Unit) {
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showCreate = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Nowy spływ")
+            var menuOpen by remember { mutableStateOf(false) }
+            Box {
+                FloatingActionButton(onClick = { menuOpen = true }) {
+                    Icon(Icons.Default.Add, contentDescription = "Dodaj spływ")
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Dołącz do spływu") },
+                        onClick = {
+                            menuOpen = false
+                            vm.openJoin()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Nowy spływ") },
+                        onClick = {
+                            menuOpen = false
+                            showCreate = true
+                        }
+                    )
+                }
             }
         }
     ) { padding ->
@@ -107,7 +127,7 @@ fun TripsScreen(onOpenTrip: (Long) -> Unit, onOpenSettings: () -> Unit) {
             }
             list.isEmpty() -> Box(Modifier.fillMaxSize().padding(padding), Alignment.Center) {
                 Text(
-                    "Nie masz jeszcze spływów.\nDotknij +, aby zaplanować pierwszy.",
+                    "Nie masz jeszcze spływów.\nDotknij +, aby zaplanować spływ albo dołączyć do istniejącego.",
                     modifier = Modifier.padding(32.dp)
                 )
             }
@@ -126,7 +146,7 @@ fun TripsScreen(onOpenTrip: (Long) -> Unit, onOpenSettings: () -> Unit) {
                             )
                             Text(
                                 Fmt.utcDate(item.trip.startDateUtcMillis) +
-                                    if (item.trip.overnight) " · z noclegiem" else " · jednodniowy"
+                                    if (item.trip.overnight) "\tz noclegiem" else "\tjednodniowy"
                             )
                             item.sectionLabel?.let {
                                 Text(it, style = MaterialTheme.typography.bodySmall)
@@ -191,7 +211,7 @@ private fun JoinTripDialog(
                                 Column(Modifier.weight(1f)) {
                                     Text(trip.title, fontWeight = FontWeight.Bold)
                                     Text(
-                                        "${trip.startDate} · Organizator: ${trip.organizer}",
+                                        "${trip.startDate}\tOrganizator: ${trip.organizer}",
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                 }

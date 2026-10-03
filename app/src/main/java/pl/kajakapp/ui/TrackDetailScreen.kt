@@ -167,7 +167,7 @@ private fun Analysis(track: TrackEntity, s: TrackSummary, modifier: Modifier) {
     ) {
         Text(
             Fmt.dateTime(s.startedAt) + " – " + Fmt.clock(s.endedAt) +
-                (track.tripTitle?.let { " · spływ: $it" } ?: ""),
+                (track.tripTitle?.let { "\tspływ: $it" } ?: ""),
             style = MaterialTheme.typography.bodyMedium
         )
 
@@ -175,7 +175,7 @@ private fun Analysis(track: TrackEntity, s: TrackSummary, modifier: Modifier) {
             "Dystans" to Fmt.distance(s.distanceM),
             "Czas całkowity" to Fmt.duration(s.elapsedMs),
             "Czas w ruchu" to Fmt.duration(s.movingMs),
-            "Postoje (od 2 min)" to if (s.stops == 0) "brak" else "${s.stops} · razem ${Fmt.duration(s.stoppedMs)}",
+            "Postoje (od 2 min)" to if (s.stops == 0) "brak" else "${s.stops}\trazem ${Fmt.duration(s.stoppedMs)}",
             "Średnia (całość)" to Fmt.speed(s.avgSpeedKmh),
             "Średnia w ruchu" to Fmt.speed(s.avgMovingSpeedKmh),
             "Maks. prędkość" to Fmt.speed(s.maxSpeedKmh),
@@ -342,7 +342,7 @@ private fun SplitsTable(splits: List<KmSplit>) {
                     )
                 }
                 Text(
-                    "${Fmt.duration(split.durationMs)} · ${Fmt.speed(split.speedKmh)}",
+                    "${Fmt.duration(split.durationMs)}\t${Fmt.speed(split.speedKmh)}",
                     modifier = Modifier.padding(start = 8.dp),
                     style = MaterialTheme.typography.bodySmall
                 )

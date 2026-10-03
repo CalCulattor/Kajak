@@ -79,7 +79,7 @@ fun KajakAppRoot() {
                         modifier = Modifier.fillMaxWidth().clickable { nav.navigate(Routes.RECORDING) { launchSingleTop = true } }
                     ) {
                         Text(
-                            "● Nagrywanie trasy · ${Fmt.distance(live.distanceM)} · ${Fmt.speed(live.speedKmh)} – otwórz",
+                            "● Nagrywanie trasy\t${Fmt.distance(live.distanceM)}\t${Fmt.speed(live.speedKmh)} – otwórz",
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                             style = MaterialTheme.typography.bodyMedium
                         )

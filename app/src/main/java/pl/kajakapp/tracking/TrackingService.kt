@@ -269,7 +269,7 @@ class TrackingService : Service() {
         if (now - lastNotificationAt < NOTIFICATION_EVERY_MS) return
         lastNotificationAt = now
         val live = recorder.live.value ?: return
-        val text = "%.2f km · %.1f km/h".format(live.distanceM / 1000.0, live.speedKmh)
+        val text = "%.2f km\t%.1f km/h".format(live.distanceM / 1000.0, live.speedKmh)
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
             .notify(NOTIFICATION_ID, buildNotification(live.title, text, live.startedAt))
     }

@@ -232,8 +232,8 @@ private fun StartHero(onClick: () -> Unit) {
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.extraLarge,
-        color = MaterialTheme.colorScheme.tertiary,
-        contentColor = MaterialTheme.colorScheme.onTertiary
+        color = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary
     ) {
         Row(
             Modifier.padding(horizontal = 24.dp, vertical = 28.dp),
@@ -241,13 +241,13 @@ private fun StartHero(onClick: () -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             Box(
-                Modifier.size(64.dp).clip(CircleShape).background(MaterialTheme.colorScheme.onTertiary),
+                Modifier.size(64.dp).clip(CircleShape).background(MaterialTheme.colorScheme.onPrimary),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     Icons.Default.PlayArrow,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.tertiary,
+                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(40.dp)
                 )
             }
@@ -281,7 +281,7 @@ private fun LiveHero(live: LiveTrack, onClick: () -> Unit) {
         contentColor = MaterialTheme.colorScheme.onPrimary
     ) {
         Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Trasa w toku · ${live.title}", style = MaterialTheme.typography.titleSmall, maxLines = 1)
+            Text("Trasa w toku\t${live.title}", style = MaterialTheme.typography.titleSmall, maxLines = 1)
             Text(
                 Fmt.duration((now - live.startedAt).coerceAtLeast(0)),
                 style = MaterialTheme.typography.displayMedium
