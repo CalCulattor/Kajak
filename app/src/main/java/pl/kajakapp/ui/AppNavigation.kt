@@ -37,7 +37,6 @@ private object Routes {
     const val RIVERS = "rivers"
     const val TRIPS = "trips"
     const val HISTORY = "history"
-    const val RECORDING = "recording"
     const val TRACK = "track/{id}"
     const val SECTION = "section/{id}"
     const val TRIP = "trip/{id}"
@@ -72,11 +71,11 @@ fun KajakAppRoot() {
         bottomBar = {
             if (showBottomBar) Column {
                 // Pasek przypominający o trwającym nagrywaniu (widoczny na wszystkich zakładkach).
-                recording?.let { live ->
+                if (route != Routes.START) recording?.let { live ->
                     Surface(
                         color = MaterialTheme.colorScheme.tertiaryContainer,
                         contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-                        modifier = Modifier.fillMaxWidth().clickable { nav.navigate(Routes.RECORDING) { launchSingleTop = true } }
+                        modifier = Modifier.fillMaxWidth().clickable { nav.switchTab(Routes.START) }
                     ) {
                         Text(
                             "● Nagrywanie trasy\t${Fmt.distance(live.distanceM)}\t${Fmt.speed(live.speedKmh)} – otwórz",
@@ -131,7 +130,6 @@ fun KajakAppRoot() {
             composable(Routes.START) {
                 StartScreen(
                     onOpenTrack = { nav.navigate(Routes.track(it)) },
-                    onOpenRecording = { nav.navigate(Routes.RECORDING) { launchSingleTop = true } },
                     onOpenSettings = { nav.navigate(Routes.SETTINGS) }
                 )
             }
@@ -152,15 +150,6 @@ fun KajakAppRoot() {
                 HistoryScreen(
                     onOpenTrack = { nav.navigate(Routes.track(it)) },
                     onOpenSettings = { nav.navigate(Routes.SETTINGS) }
-                )
-            }
-            composable(Routes.RECORDING) {
-                RecordingScreen(
-                    onBack = { nav.popBackStack() },
-                    onFinished = { trackId ->
-                        nav.popBackStack()
-                        if (trackId != null) nav.navigate(Routes.track(trackId))
-                    }
                 )
             }
             composable(

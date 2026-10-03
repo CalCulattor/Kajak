@@ -9,20 +9,17 @@ import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -37,20 +34,23 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -63,11 +63,21 @@ import pl.kajakapp.data.db.TripEntity
 import pl.kajakapp.tracking.TrackingService
 import pl.kajakapp.util.Fmt
 
-/** Ekran startowy: jedna, duża czynność – rozpoczęcie trasy – a pod nią ostatnia trasa i sumy. */
+/** Pytanie o uprawnienia przy wejściu na ekran zadajemy raz na uruchomienie aplikacji. */
+private var askedAtEntry = false
+
+private const val STARTING_WAIT_MS = 8_000L
+private const val STOPPING_WAIT_MS = 20_000L
+private const val STALE_FIX_MS = 30_000L
+private const val SPEED_FRESH_MS = 10_000L
+
+/**
+ * Ekran startowy: mapa na całą stronę, a na dole jeden panel – przycisk „Rozpocznij trasę”,
+ * który w trakcie nagrywania zamienia się w statystyki na żywo i przycisk „Zakończ”.
+ */
 @Composable
 fun StartScreen(
     onOpenTrack: (Long) -> Unit,
-    onOpenRecording: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
     val container = rememberContainer()
@@ -78,38 +88,85 @@ fun StartScreen(
         }
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    val livePath by container.recorder.livePath.collectAsStateWithLifecycle()
+    val live = state.live
+
     var showStart by remember { mutableStateOf(false) }
+    var confirmStop by remember { mutableStateOf(false) }
     var pendingStart by remember { mutableStateOf<Pair<String, TripEntity?>?>(null) }
     var pendingResume by remember { mutableStateOf(false) }
-    // Po „Wznów” karta przerwanej trasy znika na czas uruchamiania usługi.
-    var resuming by remember { mutableStateOf(false) }
-    LaunchedEffect(resuming) {
-        if (resuming) {
-            delay(8_000)
-            resuming = false
+    var locationGranted by remember { mutableStateOf(hasAnyLocation(context)) }
+    var recenter by remember { mutableIntStateOf(0) }
+    // Po „Start”/„Wznów” usługa potrzebuje chwili; w tym czasie panel pokazuje „Uruchamiam…”.
+    var starting by remember { mutableStateOf(false) }
+    var stopping by remember { mutableStateOf(false) }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(starting) {
+        if (starting) {
+            delay(STARTING_WAIT_MS)
+            starting = false
+        }
+    }
+    LaunchedEffect(live) { if (live != null) starting = false }
+    LaunchedEffect(live != null) {
+        while (live != null) {
+            now = System.currentTimeMillis()
+            delay(1000)
+        }
+    }
+
+    // Ekran nie gaśnie, gdy trwa nagrywanie i patrzysz na mapę (samo nagrywanie działa i tak).
+    val view = LocalView.current
+    DisposableEffect(view, live != null) {
+        view.keepScreenOn = live != null
+        onDispose { view.keepScreenOn = false }
+    }
+
+    // Zakończenie trasy: reagujemy tylko na wynik, którego jeszcze nie obsłużyliśmy.
+    val result by container.recorder.lastResult.collectAsStateWithLifecycle()
+    var handledSeq by remember { mutableLongStateOf(container.recorder.lastResult.value?.seq ?: -1L) }
+    LaunchedEffect(result) {
+        val finished = result
+        if (finished != null && finished.seq != handledSeq) {
+            handledSeq = finished.seq
+            stopping = false
+            val id = finished.trackId
+            if (id != null) {
+                onOpenTrack(id)
+            } else {
+                Toast.makeText(context, "Trasa była zbyt krótka – nie zapisano.", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+    // Gdyby zapis się nie udał, nie zostajemy w nieskończoność na „Zapisuję…”.
+    LaunchedEffect(stopping) {
+        if (stopping) {
+            delay(STOPPING_WAIT_MS)
+            stopping = false
         }
     }
 
     fun startNow(request: Pair<String, TripEntity?>) {
+        starting = true
         TrackingService.start(context, request.first, request.second?.id, request.second?.title)
-        onOpenRecording()
     }
 
     fun resumeNow() {
-        resuming = true
+        starting = true
         TrackingService.resume(context)
-        onOpenRecording()
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { result ->
+    ) { _ ->
+        locationGranted = hasAnyLocation(context)
         val request = pendingStart
         val resume = pendingResume
         pendingStart = null
         pendingResume = false
         if (request != null || resume) {
-            if (result[Manifest.permission.ACCESS_FINE_LOCATION] == true || hasFineLocation(context)) {
+            if (hasFineLocation(context)) {
                 if (request != null) startNow(request) else resumeNow()
             } else {
                 Toast.makeText(
@@ -118,6 +175,19 @@ fun StartScreen(
                     Toast.LENGTH_LONG
                 ).show()
             }
+        }
+    }
+
+    // Pozycja na mapie wymaga lokalizacji – pytamy raz przy wejściu na ekran.
+    LaunchedEffect(Unit) {
+        if (!askedAtEntry && !hasAnyLocation(context)) {
+            askedAtEntry = true
+            val permissions = buildList {
+                add(Manifest.permission.ACCESS_FINE_LOCATION)
+                add(Manifest.permission.ACCESS_COARSE_LOCATION)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            permissionLauncher.launch(permissions.toTypedArray())
         }
     }
 
@@ -150,60 +220,50 @@ fun StartScreen(
             )
         }
     ) { padding ->
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            item {
-                val live = state.live
-                val interrupted = if (resuming) null else state.interrupted
-                when {
-                    live != null -> LiveHero(live, onClick = onOpenRecording)
-                    interrupted != null -> InterruptedCard(
-                        track = interrupted,
-                        onResume = { requestStart(null) },
-                        onFinish = {
-                            vm.finishInterrupted { id ->
-                                // Gdyby usługa nadal działała, kończymy ją też.
-                                TrackingService.stop(context)
-                                if (id != null) {
-                                    onOpenTrack(id)
-                                } else {
-                                    Toast.makeText(context, "Trasa była zbyt krótka – nie zapisano.", Toast.LENGTH_LONG).show()
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            KajakMap(
+                path = livePath,
+                modifier = Modifier.fillMaxSize(),
+                followUser = locationGranted,
+                ornamentsOnTop = true,
+                recenterKey = recenter
+            )
+            if (locationGranted) {
+                SmallFloatingActionButton(
+                    onClick = { recenter++ },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(top = 48.dp, end = 12.dp),
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.primary
+                ) { Icon(Icons.Default.Place, contentDescription = "Pokaż moją pozycję") }
+            }
+            Surface(
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(12.dp),
+                shape = MaterialTheme.shapes.extraLarge,
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 6.dp
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    val interrupted = if (starting) null else state.interrupted
+                    when {
+                        live != null -> LiveStats(
+                            live = live,
+                            now = now,
+                            stopping = stopping,
+                            onStop = { confirmStop = true }
+                        )
+                        interrupted != null -> InterruptedCard(
+                            track = interrupted,
+                            onResume = { requestStart(null) },
+                            onFinish = {
+                                // Przejście do trasy (albo komunikat) obsługuje wspólny efekt wyniku powyżej.
+                                vm.finishInterrupted {
+                                    // Gdyby usługa nadal działała, kończymy ją też.
+                                    TrackingService.stop(context)
                                 }
                             }
-                        }
-                    )
-                    else -> StartHero(onClick = { showStart = true })
-                }
-            }
-
-            val last = state.tracks.firstOrNull()
-            if (last != null) {
-                item { SectionTitle("Ostatnia trasa") }
-                item { TrackRow(last, onClick = { onOpenTrack(last.id) }) }
-                item { SectionTitle("W sumie") }
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            StatTile("Przepłynięte", Fmt.distance(state.totals.distanceM), Modifier.weight(1f))
-                            StatTile("Czas na wodzie", Fmt.duration(state.totals.elapsedMs), Modifier.weight(1f))
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            StatTile("Trasy", state.totals.count.toString(), Modifier.weight(1f))
-                            StatTile("Średnia w ruchu", Fmt.speed(state.totals.avgMovingKmh), Modifier.weight(1f))
-                        }
+                        )
+                        else -> StartButton(starting = starting, onClick = { showStart = true })
                     }
-                }
-            } else {
-                item {
-                    Text(
-                        "Po pierwszej trasie zobaczysz tu jej podsumowanie i swoje statystyki.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 8.dp)
-                    )
                 }
             }
         }
@@ -219,94 +279,87 @@ fun StartScreen(
             }
         )
     }
+
+    if (confirmStop) {
+        AlertDialog(
+            onDismissRequest = { confirmStop = false },
+            title = { Text("Zakończyć trasę?") },
+            text = { Text("Trasa zostanie zapisana w historii i pokażę jej podsumowanie.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmStop = false
+                    stopping = true
+                    TrackingService.stop(context)
+                }) { Text("Zakończ i zapisz") }
+            },
+            dismissButton = { TextButton(onClick = { confirmStop = false }) { Text("Wróć do trasy") } }
+        )
+    }
 }
+
+@Composable
+private fun StartButton(starting: Boolean, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        enabled = !starting,
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth().height(64.dp)
+    ) {
+        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(32.dp))
+        Text(
+            if (starting) "  Uruchamiam…" else "  Rozpocznij trasę",
+            style = MaterialTheme.typography.titleLarge
+        )
+    }
+}
+
+/** Statystyki trasy w toku i przycisk „Zakończ”. */
+@Composable
+private fun LiveStats(live: LiveTrack, now: Long, stopping: Boolean, onStop: () -> Unit) {
+    val fresh = live.lastFixAt != null && now - live.lastFixAt <= SPEED_FRESH_MS
+    val warning = when {
+        !live.gpsEnabled -> "GPS jest wyłączony – włącz lokalizację w telefonie."
+        live.lastFixAt == null -> "Czekam na sygnał GPS… Wyjdź na otwartą przestrzeń."
+        now - live.lastFixAt > STALE_FIX_MS -> "Brak świeżego odczytu GPS (${Fmt.ageText(live.lastFixAt, now)})."
+        else -> null
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(live.title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        Text(
+            Fmt.duration((now - live.startedAt).coerceAtLeast(0)),
+            style = MaterialTheme.typography.displaySmall
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            StatTile("Dystans", Fmt.distance(live.distanceM), Modifier.weight(1f))
+            // Bez świeżego odczytu GPS pokazujemy 0, a nie ostatnią znaną prędkość.
+            StatTile("Prędkość", Fmt.speed(if (fresh) live.speedKmh else 0.0), Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            StatTile("Czas w ruchu", Fmt.duration(live.movingMs), Modifier.weight(1f))
+            StatTile("Maks. prędkość", Fmt.speed(live.maxSpeedKmh), Modifier.weight(1f))
+        }
+        if (warning != null) {
+            Text(warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        Button(
+            onClick = onStop,
+            enabled = !stopping,
+            shape = MaterialTheme.shapes.large,
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+            modifier = Modifier.fillMaxWidth().height(60.dp)
+        ) {
+            Text(if (stopping) "Zapisuję trasę…" else "Zakończ trasę", style = MaterialTheme.typography.titleLarge)
+        }
+    }
+}
+
+private fun hasAnyLocation(context: Context): Boolean =
+    hasFineLocation(context) || ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
 
 private fun hasFineLocation(context: Context): Boolean =
     ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
-
-/** Jedyny mocny akcent w aplikacji: duży pomarańczowy przycisk startu. */
-@Composable
-private fun StartHero(onClick: () -> Unit) {
-    Surface(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.extraLarge,
-        color = MaterialTheme.colorScheme.primary,
-        contentColor = MaterialTheme.colorScheme.onPrimary
-    ) {
-        Row(
-            Modifier.padding(horizontal = 24.dp, vertical = 28.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(20.dp)
-        ) {
-            Box(
-                Modifier.size(64.dp).clip(CircleShape).background(MaterialTheme.colorScheme.onPrimary),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Default.PlayArrow,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(40.dp)
-                )
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Rozpocznij trasę", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text(
-                    "Zapiszę przebieg spływu: dystans, czas i prędkość.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-        }
-    }
-}
-
-/** Trwające nagrywanie: czas i dystans na dużej, ciemnej karcie; dotknięcie otwiera pełny podgląd. */
-@Composable
-private fun LiveHero(live: LiveTrack, onClick: () -> Unit) {
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            now = System.currentTimeMillis()
-            delay(1000)
-        }
-    }
-    val fresh = live.lastFixAt != null && now - live.lastFixAt <= 10_000L
-    Surface(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.extraLarge,
-        color = MaterialTheme.colorScheme.primary,
-        contentColor = MaterialTheme.colorScheme.onPrimary
-    ) {
-        Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Trasa w toku\t${live.title}", style = MaterialTheme.typography.titleSmall, maxLines = 1)
-            Text(
-                Fmt.duration((now - live.startedAt).coerceAtLeast(0)),
-                style = MaterialTheme.typography.displayMedium
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
-                Column {
-                    Text(Fmt.distance(live.distanceM), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Text("dystans", style = MaterialTheme.typography.bodySmall)
-                }
-                Column {
-                    Text(
-                        Fmt.speed(if (fresh) live.speedKmh else 0.0),
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text("prędkość", style = MaterialTheme.typography.bodySmall)
-                }
-            }
-            Text(
-                if (!live.gpsEnabled) "GPS jest wyłączony – włącz lokalizację." else "Dotknij, aby otworzyć podgląd i zakończyć trasę.",
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-    }
-}
 
 @Composable
 private fun InterruptedCard(track: TrackEntity, onResume: () -> Unit, onFinish: () -> Unit) {

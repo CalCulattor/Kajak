@@ -189,9 +189,14 @@ private fun Analysis(track: TrackEntity, s: TrackSummary, modifier: Modifier) {
         }
 
         Section("Przebieg trasy") {
-            TrackMap(s.path, Modifier.fillMaxWidth().height(260.dp))
+            KajakMap(
+                path = s.path,
+                modifier = Modifier.fillMaxWidth().height(320.dp),
+                fitPath = true,
+                showEnds = true
+            )
             Text(
-                "Zielony punkt – start, czerwony – koniec. Ślad bez podkładu mapy (działa offline).",
+                "Zielony punkt – start, czerwony – koniec.",
                 style = MaterialTheme.typography.bodySmall
             )
         }
@@ -237,39 +242,6 @@ private fun StatCard(label: String, value: String, modifier: Modifier = Modifier
             Text(label, style = MaterialTheme.typography.bodySmall)
             Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         }
-    }
-}
-
-/** Rysuje ślad GPS w prostym rzucie (z poprawką na zbieżność południków), bez podkładu mapy. */
-@Composable
-private fun TrackMap(path: List<PathPoint>, modifier: Modifier) {
-    val line = MaterialTheme.colorScheme.primary
-    val bg = MaterialTheme.colorScheme.surfaceVariant
-    Canvas(modifier.background(bg)) {
-        if (path.size < 2) return@Canvas
-        val minLat = path.minOf { it.lat }
-        val maxLat = path.maxOf { it.lat }
-        val minLon = path.minOf { it.lon }
-        val maxLon = path.maxOf { it.lon }
-        val lonScale = cos(Math.toRadians((minLat + maxLat) / 2))
-        val spanX = max((maxLon - minLon) * lonScale, 1e-9)
-        val spanY = max(maxLat - minLat, 1e-9)
-        val pad = 24.dp.toPx()
-        val scale = min((size.width - 2 * pad) / spanX, (size.height - 2 * pad) / spanY)
-        val offX = (size.width - spanX * scale) / 2
-        val offY = (size.height - spanY * scale) / 2
-        fun point(p: PathPoint) = Offset(
-            (offX + (p.lon - minLon) * lonScale * scale).toFloat(),
-            (offY + (maxLat - p.lat) * scale).toFloat()
-        )
-        val route = Path()
-        path.forEachIndexed { i, p ->
-            val o = point(p)
-            if (i == 0) route.moveTo(o.x, o.y) else route.lineTo(o.x, o.y)
-        }
-        drawPath(route, line, style = Stroke(width = 4.dp.toPx()))
-        drawCircle(Color(0xFF2E7D32), radius = 7.dp.toPx(), center = point(path.first()))
-        drawCircle(Color(0xFFC62828), radius = 7.dp.toPx(), center = point(path.last()))
     }
 }
 

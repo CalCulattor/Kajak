@@ -1,5 +1,6 @@
 package pl.kajakapp
 
+import com.mapbox.common.MapboxOptions
 import android.app.Activity
 import android.app.Application
 import android.os.Bundle
@@ -47,6 +48,8 @@ class KajakApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Token publiczny Mapbox (z local.properties przez resValue); bez niego mapy pokażą komunikat.
+        getString(R.string.mapbox_access_token).takeIf { it.isNotBlank() }?.let { MapboxOptions.accessToken = it }
         container = AppContainer(this, appScope)
         appScope.launch { container.rivers.seedMissing() }
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
