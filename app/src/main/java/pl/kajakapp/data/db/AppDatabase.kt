@@ -17,9 +17,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TripEntity::class,
         ParticipantEntity::class,
         GearItemEntity::class,
-        CheckInEntity::class
+        CheckInEntity::class,
+        TrackEntity::class,
+        TrackPointEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -27,6 +29,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun obstacleDao(): ObstacleDao
     abstract fun cacheDao(): CacheDao
     abstract fun tripDao(): TripDao
+    abstract fun trackDao(): TrackDao
 
     companion object {
         /** Dodaje pola synchronizacji z serwerem. Dane użytkownika zostają nienaruszone. */
@@ -78,9 +81,42 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** Dodaje nagrane trasy (historia spływów). */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `tracks` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`title` TEXT NOT NULL, " +
+                        "`ownerUsername` TEXT, " +
+                        "`tripId` INTEGER, " +
+                        "`tripTitle` TEXT, " +
+                        "`startedAt` INTEGER NOT NULL, " +
+                        "`endedAt` INTEGER, " +
+                        "`distanceM` REAL NOT NULL, " +
+                        "`elapsedMs` INTEGER NOT NULL, " +
+                        "`movingMs` INTEGER NOT NULL, " +
+                        "`maxSpeedKmh` REAL NOT NULL, " +
+                        "`pointCount` INTEGER NOT NULL)"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_tracks_startedAt` ON `tracks` (`startedAt`)")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `track_points` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`trackId` INTEGER NOT NULL, " +
+                        "`time` INTEGER NOT NULL, " +
+                        "`lat` REAL NOT NULL, " +
+                        "`lon` REAL NOT NULL, " +
+                        "`accuracy` REAL, " +
+                        "FOREIGN KEY(`trackId`) REFERENCES `tracks`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_points_trackId` ON `track_points` (`trackId`)")
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "kajakapp.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build()
     }
 }

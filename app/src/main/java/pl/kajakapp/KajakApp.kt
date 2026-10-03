@@ -14,6 +14,8 @@ import pl.kajakapp.data.LiveUpdates
 import pl.kajakapp.data.RiverRepository
 import pl.kajakapp.data.ServerSettings
 import pl.kajakapp.data.SyncRepository
+import pl.kajakapp.data.TrackRecorder
+import pl.kajakapp.data.TrackRepository
 import pl.kajakapp.data.TripRepository
 import pl.kajakapp.data.db.AppDatabase
 import pl.kajakapp.data.remote.Network
@@ -26,6 +28,8 @@ class AppContainer(app: Application, scope: CoroutineScope) {
     val live = LiveUpdates(settings, sync, scope)
     val rivers = RiverRepository(db)
     val trips = TripRepository(db)
+    val tracks = TrackRepository(db.trackDao())
+    val recorder = TrackRecorder(db.trackDao(), settings)
     val conditions = ConditionsRepository(Network.imgw, Network.openMeteo, db.cacheDao())
 }
 

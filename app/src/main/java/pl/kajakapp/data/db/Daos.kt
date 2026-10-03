@@ -204,3 +204,41 @@ interface TripDao {
     @Update
     suspend fun updateCheckIn(checkIn: CheckInEntity)
 }
+
+@Dao
+interface TrackDao {
+    @Insert
+    suspend fun insertTrack(track: TrackEntity): Long
+
+    @Update
+    suspend fun updateTrack(track: TrackEntity)
+
+    @Insert
+    suspend fun insertPoint(point: TrackPointEntity)
+
+    @Query("SELECT * FROM tracks WHERE id = :id")
+    suspend fun getTrack(id: Long): TrackEntity?
+
+    @Query("SELECT * FROM tracks WHERE id = :id")
+    fun observeTrack(id: Long): Flow<TrackEntity?>
+
+    /** Zakończone trasy, od najnowszej. */
+    @Query("SELECT * FROM tracks WHERE endedAt IS NOT NULL ORDER BY startedAt DESC")
+    fun observeFinished(): Flow<List<TrackEntity>>
+
+    /** Trasa w toku (co najwyżej jedna). */
+    @Query("SELECT * FROM tracks WHERE endedAt IS NULL ORDER BY startedAt DESC LIMIT 1")
+    suspend fun activeTrack(): TrackEntity?
+
+    @Query("SELECT * FROM tracks WHERE endedAt IS NULL ORDER BY startedAt DESC LIMIT 1")
+    fun observeActive(): Flow<TrackEntity?>
+
+    @Query("SELECT * FROM track_points WHERE trackId = :trackId ORDER BY time, id")
+    suspend fun pointsOf(trackId: Long): List<TrackPointEntity>
+
+    @Query("UPDATE tracks SET title = :title WHERE id = :id")
+    suspend fun rename(id: Long, title: String)
+
+    @Query("DELETE FROM tracks WHERE id = :id")
+    suspend fun deleteTrack(id: Long)
+}

@@ -224,3 +224,44 @@ data class CheckInEntity(
     val pendingSync: Boolean = true,
     val serverId: Long? = null
 )
+
+/** Nagrana trasa spływu (historia użytkownika). [endedAt] == null oznacza trasę w toku. */
+@Entity(tableName = "tracks", indices = [Index("startedAt")])
+data class TrackEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    /** Konto, na którym nagrano trasę (null = bez logowania). */
+    val ownerUsername: String? = null,
+    /** Lokalny spływ, do którego przypisano trasę (tylko informacyjnie – spływ można usunąć). */
+    val tripId: Long? = null,
+    val tripTitle: String? = null,
+    val startedAt: Long,
+    val endedAt: Long? = null,
+    // Podsumowanie zapisane przy zakończeniu (do listy historii bez przeliczania punktów).
+    val distanceM: Double = 0.0,
+    val elapsedMs: Long = 0,
+    val movingMs: Long = 0,
+    val maxSpeedKmh: Double = 0.0,
+    val pointCount: Int = 0
+)
+
+@Entity(
+    tableName = "track_points",
+    foreignKeys = [
+        ForeignKey(
+            entity = TrackEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["trackId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("trackId")]
+)
+data class TrackPointEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val trackId: Long,
+    val time: Long,
+    val lat: Double,
+    val lon: Double,
+    val accuracy: Float? = null
+)

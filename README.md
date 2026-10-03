@@ -55,6 +55,24 @@ Aktualizacje na żywo: gdy aplikacja jest na ekranie i jesteś zalogowany, trzym
 
 Organizatorzy: spływ może mieć kilku organizatorów. Organizator mianuje innych uczestników organizatorami (zakładka Uczestnicy → „Mianuj organizatorem”) i może usunąć spływ dla wszystkich. Organizator może opuścić spływ, gdy jest drugi organizator – spływ zostaje. Jedyny organizator nie może wyjść (najpierw mianuje następcę albo usuwa spływ). Zwykły uczestnik może spływ tylko opuścić na serwerze (nie da się go usunąć wyłącznie lokalnie). Terminu spływu nie można ustawić w przeszłości.
 
+## Nagrywanie trasy i historia spływów
+
+Zakładka **Historia** → „Rozpocznij trasę”. Aplikacja prosi o dokładną lokalizację (i o zgodę na powiadomienia),
+a potem zapisuje pozycję GPS co ok. 3 s w usłudze pierwszoplanowej (z powiadomieniem), więc nagrywanie działa
+także przy wygaszonym ekranie. Trasę kończysz przyciskiem na ekranie nagrywania albo „Zakończ” w powiadomieniu.
+Można ją przypisać do spływu (opcjonalnie). Każdy odczyt trafia od razu do bazy – po zamknięciu aplikacji przez
+system trasa zostaje i można ją wznowić albo zapisać.
+
+Po zakończeniu powstaje analiza: dystans, czas całkowity i w ruchu, postoje (od 2 min), średnia prędkość
+(całość i w ruchu), prędkość maksymalna (wygładzona z okna 10 s), tempo min/km, wykres prędkości w czasie,
+ślad na planszy (bez mapy, działa offline) oraz czasy kolejnych kilometrów. Zakładka Historia pokazuje też
+sumy ze wszystkich tras. Logika (`domain/TrackStats.kt`) odrzuca niedokładne odczyty (> 50 m), skoki GPS
+szybsze niż 32 km/h i „drżenie” na postoju. Historia jest zapisana tylko na telefonie (nie jest wysyłana na serwer)
+i przypisana do konta, na którym nagrano trasę.
+
+Uwaga: niektórzy producenci (Xiaomi, Huawei, Samsung) agresywnie zamykają aplikacje w tle – wyłącz dla KajakApp
+oszczędzanie baterii, jeśli nagrywanie się urywa.
+
 ## Czego jeszcze nie ma (świadomie)
 
 - **Map offline** i rysowania trasy na mapie (pozycje otwierają się w zewnętrznej aplikacji map).
