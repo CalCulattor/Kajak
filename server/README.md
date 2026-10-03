@@ -48,6 +48,7 @@ Wszystkie odpowiedzi to JSON. Błędy mają postać `{"error": "..."}`.
 | Metoda i ścieżka | Opis |
 | --- | --- |
 | `GET /api/health` | Sprawdzenie, czy serwer działa (bez logowania). |
+| `GET /api/events` | Aktualizacje „na żywo” (Server-Sent Events), tylko po zalogowaniu. Połączenie jest otwarte stale, co 20 s serwer wysyła `: ping`. Zdarzenia niosą tylko identyfikatory, dane klient pobiera zwykłymi (autoryzowanymi) endpointami: `trip` `{"trip_id":N}` (zmiana uczestników, wyposażenia, zameldowań, usunięcie), `trips` (nowy lub usunięty spływ), `routes` (nowa trasa), `obstacles` `{"section_key":"..."}`. Reverse proxy nie może buforować odpowiedzi ani skracać czasu odczytu (nginx: `proxy_buffering off; proxy_read_timeout 1h;`). |
 | `POST /api/register` | Nowe konto: `username` (3–24 znaki: a-z, A-Z, 0-9, `_ . -`; unikalne bez względu na wielkość liter) i `password` (8–128 znaków). Zwraca `{"token","username"}`; 409 gdy nazwa zajęta. |
 | `POST /api/login` | Logowanie tym samym ciałem. 401 przy złych danych, 429 po 8 nieudanych próbach na konto (blokada na 10 min). |
 | `POST /api/logout`, `GET /api/me` | Unieważnienie bieżącego tokenu i sprawdzenie, kim jestem. |

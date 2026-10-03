@@ -27,6 +27,7 @@ var dateRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
 type Server struct {
 	store         *Store
+	hub           *hub     // powiadomienia na żywo (SSE)
 	loginLimit    *limiter // nieudane logowania na nazwę użytkownika
 	registerLimit *limiter // rejestracje ogółem (ochrona przed zalewaniem pliku danych)
 }
@@ -34,6 +35,7 @@ type Server struct {
 func NewServer(store *Store) *Server {
 	return &Server{
 		store:         store,
+		hub:           newHub(),
 		loginLimit:    newLimiter(8, 10*time.Minute),
 		registerLimit: newLimiter(30, time.Hour),
 	}
@@ -49,6 +51,7 @@ func (srv *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/login", srv.login)
 	mux.HandleFunc("POST /api/logout", srv.logout)
 	mux.HandleFunc("GET /api/me", srv.me)
+	mux.HandleFunc("GET /api/events", srv.events)
 
 	mux.HandleFunc("GET /api/routes", srv.listRoutes)
 	mux.HandleFunc("POST /api/routes", srv.createRoute)
@@ -163,6 +166,9 @@ type statusRecorder struct {
 	status int
 }
 
+// Unwrap pozwala http.ResponseController dotrzeć do oryginalnego ResponseWriter (Flush, deadline).
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
@@ -256,6 +262,9 @@ func (srv *Server) createRoute(w http.ResponseWriter, r *http.Request) {
 		if !created {
 			status = http.StatusOK
 		}
+		if created {
+			srv.routesChanged()
+		}
 		writeJSON(w, status, rt)
 	}
 }
@@ -336,6 +345,9 @@ func (srv *Server) createObstacle(w http.ResponseWriter, r *http.Request) {
 	if !created {
 		status = http.StatusOK
 	}
+	if created {
+		srv.obstaclesChanged(key)
+	}
 	writeJSON(w, status, viewOf(o))
 }
 
@@ -353,6 +365,7 @@ func (srv *Server) voteObstacle(confirm bool) http.HandlerFunc {
 			storeError(w, err)
 			return
 		}
+		srv.obstaclesChanged(o.SectionKey)
 		writeJSON(w, http.StatusOK, viewOf(o))
 	}
 }
@@ -442,6 +455,7 @@ func (srv *Server) createTrip(w http.ResponseWriter, r *http.Request) {
 		storeError(w, err)
 		return
 	}
+	srv.tripsChanged()
 	writeJSON(w, http.StatusCreated, t)
 }
 
@@ -482,6 +496,8 @@ func (srv *Server) deleteTrip(w http.ResponseWriter, r *http.Request) {
 		storeError(w, err)
 		return
 	}
+	srv.tripChanged(id)
+	srv.tripsChanged()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -525,6 +541,7 @@ func (srv *Server) createParticipant(w http.ResponseWriter, r *http.Request) {
 	if !created {
 		status = http.StatusOK
 	}
+	srv.tripChanged(tripID)
 	writeJSON(w, status, p)
 }
 
@@ -545,6 +562,7 @@ func (srv *Server) deleteParticipant(w http.ResponseWriter, r *http.Request) {
 		storeError(w, err)
 		return
 	}
+	srv.tripChanged(tripID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -599,6 +617,7 @@ func (srv *Server) createGear(w http.ResponseWriter, r *http.Request) {
 		storeError(w, err)
 		return
 	}
+	srv.tripChanged(tripID)
 	writeJSON(w, http.StatusCreated, g)
 }
 
@@ -661,6 +680,7 @@ func (srv *Server) patchGear(w http.ResponseWriter, r *http.Request) {
 		storeError(w, err)
 		return
 	}
+	srv.tripChanged(tripID)
 	writeJSON(w, http.StatusOK, g)
 }
 
@@ -680,6 +700,7 @@ func (srv *Server) deleteGear(w http.ResponseWriter, r *http.Request) {
 		storeError(w, err)
 		return
 	}
+	srv.tripChanged(tripID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -762,6 +783,9 @@ func (srv *Server) createCheckIn(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusCreated
 	if !created {
 		status = http.StatusOK
+	}
+	if created {
+		srv.tripChanged(tripID)
 	}
 	writeJSON(w, status, c)
 }

@@ -58,7 +58,7 @@ import pl.kajakapp.util.Fmt
 fun TripsScreen(onOpenTrip: (Long) -> Unit, onOpenSettings: () -> Unit) {
     val container = rememberContainer()
     val vm: TripsViewModel = viewModel(
-        factory = VmFactory { TripsViewModel(container.trips, container.rivers, container.sync, container.settings) }
+        factory = VmFactory { TripsViewModel(container.trips, container.rivers, container.sync, container.settings, container.live) }
     )
     val items by vm.items.collectAsStateWithLifecycle()
     val sections by vm.sections.collectAsStateWithLifecycle()
@@ -131,6 +131,10 @@ fun TripsScreen(onOpenTrip: (Long) -> Unit, onOpenSettings: () -> Unit) {
                             item.sectionLabel?.let {
                                 Text(it, style = MaterialTheme.typography.bodySmall)
                             }
+                            Text(
+                                "Organizator: ${item.trip.ownerUsername ?: item.trip.organizer}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                     }
                 }
@@ -187,7 +191,7 @@ private fun JoinTripDialog(
                                 Column(Modifier.weight(1f)) {
                                     Text(trip.title, fontWeight = FontWeight.Bold)
                                     Text(
-                                        "${trip.startDate} · ${trip.organizer}",
+                                        "${trip.startDate} · Organizator: ${trip.organizer}",
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                 }
