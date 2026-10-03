@@ -104,3 +104,7 @@ Konfiguracja:
 3. Repozytorium SDK jest dodane w `settings.gradle.kts`. Gdyby synchronizacja Gradle zwróciła 401, dodaj w `~/.gradle/gradle.properties` (Windows: `C:\Users\<ty>\.gradle\gradle.properties`, poza projektem) linię `MAPBOX_DOWNLOADS_TOKEN=sk.…` – token tajny z uprawnieniem `DOWNLOADS:READ`; `settings.gradle.kts` użyje go automatycznie. Nigdy nie wpisuj go do repozytorium.
 
 Wersja SDK jest w `gradle/libs.versions.toml` (`mapbox`). Bez tokenu mapa wyświetla komunikat zamiast kafelków.
+
+## Pauza trasy
+
+Podczas nagrywania panel na ekranie Start ma przyciski „Wstrzymaj/Wznów” i „Zakończ” oraz przełącznik „Ukryj/Pokaż statystyki”. Pauza zatrzymuje licznik czasu i pomija odczyty GPS; jej czas jest zapisywany (`pausedMs`, migracja bazy 5→6) i odejmowany od czasu trasy w historii i szczegółach. Ograniczenia: stan pauzy żyje w pamięci (po zabiciu aplikacji trasa wraca do wznowienia jako nie wstrzymana), a lokalizacja jest w trakcie pauzy nadal odbierana (usługa działa), tylko nie zapisywana.

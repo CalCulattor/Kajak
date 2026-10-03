@@ -46,6 +46,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -97,6 +98,7 @@ fun StartScreen(
     var pendingResume by remember { mutableStateOf(false) }
     var locationGranted by remember { mutableStateOf(hasAnyLocation(context)) }
     var recenter by remember { mutableIntStateOf(0) }
+    var statsVisible by rememberSaveable { mutableStateOf(true) }
     // Po „Start”/„Wznów” usługa potrzebuje chwili; w tym czasie panel pokazuje „Uruchamiam…”.
     var starting by remember { mutableStateOf(false) }
     var stopping by remember { mutableStateOf(false) }
@@ -249,6 +251,9 @@ fun StartScreen(
                             live = live,
                             now = now,
                             stopping = stopping,
+                            statsVisible = statsVisible,
+                            onToggleStats = { statsVisible = !statsVisible },
+                            onTogglePause = { vm.setPaused(!live.paused) },
                             onStop = { confirmStop = true }
                         )
                         interrupted != null -> InterruptedCard(
@@ -313,42 +318,69 @@ private fun StartButton(starting: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** Statystyki trasy w toku i przycisk „Zakończ”. */
+/** Statystyki trasy w toku (można je schować) oraz przyciski „Wstrzymaj/Wznów” i „Zakończ”. */
 @Composable
-private fun LiveStats(live: LiveTrack, now: Long, stopping: Boolean, onStop: () -> Unit) {
+private fun LiveStats(
+    live: LiveTrack,
+    now: Long,
+    stopping: Boolean,
+    statsVisible: Boolean,
+    onToggleStats: () -> Unit,
+    onTogglePause: () -> Unit,
+    onStop: () -> Unit
+) {
     val fresh = live.lastFixAt != null && now - live.lastFixAt <= SPEED_FRESH_MS
     val warning = when {
+        live.paused -> null
         !live.gpsEnabled -> "GPS jest wyłączony – włącz lokalizację w telefonie."
         live.lastFixAt == null -> "Czekam na sygnał GPS… Wyjdź na otwartą przestrzeń."
         now - live.lastFixAt > STALE_FIX_MS -> "Brak świeżego odczytu GPS (${Fmt.ageText(live.lastFixAt, now)})."
         else -> null
     }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(live.title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-        Text(
-            Fmt.duration((now - live.startedAt).coerceAtLeast(0)),
-            style = MaterialTheme.typography.displaySmall
-        )
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            StatTile("Dystans", Fmt.distance(live.distanceM), Modifier.weight(1f))
-            // Bez świeżego odczytu GPS pokazujemy 0, a nie ostatnią znaną prędkość.
-            StatTile("Prędkość", Fmt.speed(if (fresh) live.speedKmh else 0.0), Modifier.weight(1f))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (live.paused) "${live.title}\twstrzymano" else live.title,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+            TextButton(onClick = onToggleStats) { Text(if (statsVisible) "Ukryj statystyki" else "Pokaż statystyki") }
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            StatTile("Czas w ruchu", Fmt.duration(live.movingMs), Modifier.weight(1f))
-            StatTile("Maks. prędkość", Fmt.speed(live.maxSpeedKmh), Modifier.weight(1f))
+        if (statsVisible) {
+            Text(Fmt.duration(live.activeElapsedMs(now)), style = MaterialTheme.typography.displaySmall)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                StatTile("Dystans", Fmt.distance(live.distanceM), Modifier.weight(1f))
+                // Bez świeżego odczytu GPS (albo przy pauzie) pokazujemy 0, a nie ostatnią znaną prędkość.
+                StatTile("Prędkość", Fmt.speed(if (fresh && !live.paused) live.speedKmh else 0.0), Modifier.weight(1f))
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                StatTile("Czas w ruchu", Fmt.duration(live.movingMs), Modifier.weight(1f))
+                StatTile("Maks. prędkość", Fmt.speed(live.maxSpeedKmh), Modifier.weight(1f))
+            }
         }
         if (warning != null) {
             Text(warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
-        Button(
-            onClick = onStop,
-            enabled = !stopping,
-            shape = MaterialTheme.shapes.large,
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-            modifier = Modifier.fillMaxWidth().height(60.dp)
-        ) {
-            Text(if (stopping) "Zapisuję trasę…" else "Zakończ trasę", style = MaterialTheme.typography.titleLarge)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedButton(
+                onClick = onTogglePause,
+                enabled = !stopping,
+                shape = MaterialTheme.shapes.large,
+                modifier = Modifier.weight(1f).height(60.dp)
+            ) {
+                Text(if (live.paused) "Wznów" else "Wstrzymaj", style = MaterialTheme.typography.titleMedium)
+            }
+            Button(
+                onClick = onStop,
+                enabled = !stopping,
+                shape = MaterialTheme.shapes.large,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                modifier = Modifier.weight(1f).height(60.dp)
+            ) {
+                Text(if (stopping) "Zapisuję…" else "Zakończ", style = MaterialTheme.typography.titleMedium)
+            }
         }
     }
 }

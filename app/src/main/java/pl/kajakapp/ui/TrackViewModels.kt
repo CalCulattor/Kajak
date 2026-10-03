@@ -84,6 +84,11 @@ class HistoryViewModel(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(TRACK_STOP_TIMEOUT_MS), HistoryState())
 
+    /** Wstrzymuje albo wznawia trasę w toku. */
+    fun setPaused(paused: Boolean) {
+        viewModelScope.launch { recorder.setPaused(paused) }
+    }
+
     /** Kończy i zapisuje przerwaną trasę; zwraca id zapisanej trasy (albo null, gdy była pusta). */
     fun finishInterrupted(onDone: (Long?) -> Unit) {
         viewModelScope.launch {

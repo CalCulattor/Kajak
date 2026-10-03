@@ -21,7 +21,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TrackEntity::class,
         TrackPointEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -114,9 +114,16 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** Dodaje czas pauzy do nagranych tras. */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `tracks` ADD COLUMN `pausedMs` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "kajakapp.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .build()
     }
 }

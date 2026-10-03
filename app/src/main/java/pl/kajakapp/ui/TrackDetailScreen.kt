@@ -171,12 +171,15 @@ private fun Analysis(track: TrackEntity, s: TrackSummary, modifier: Modifier) {
             style = MaterialTheme.typography.bodyMedium
         )
 
-        val stats = listOf(
+        // Czas pauzy nie jest czasem trasy ani postojem.
+        val elapsed = activeElapsedMs(track, s)
+        val stats = listOfNotNull(
             "Dystans" to Fmt.distance(s.distanceM),
-            "Czas całkowity" to Fmt.duration(s.elapsedMs),
+            "Czas całkowity" to Fmt.duration(elapsed),
             "Czas w ruchu" to Fmt.duration(s.movingMs),
             "Postoje (od 2 min)" to if (s.stops == 0) "brak" else "${s.stops}\trazem ${Fmt.duration(s.stoppedMs)}",
-            "Średnia (całość)" to Fmt.speed(s.avgSpeedKmh),
+            if (track.pausedMs > 0) "Pauza" to Fmt.duration(track.pausedMs) else null,
+            "Średnia (całość)" to Fmt.speed(avgAllKmh(track, s)),
             "Średnia w ruchu" to Fmt.speed(s.avgMovingSpeedKmh),
             "Maks. prędkość" to Fmt.speed(s.maxSpeedKmh),
             "Tempo w ruchu" to Fmt.pace(s.paceMinPerKm)
@@ -330,11 +333,19 @@ private fun SplitsTable(splits: List<KmSplit>) {
     }
 }
 
+private fun activeElapsedMs(track: TrackEntity, s: TrackSummary): Long =
+    (s.elapsedMs - track.pausedMs).coerceAtLeast(0)
+
+private fun avgAllKmh(track: TrackEntity, s: TrackSummary): Double {
+    val elapsed = activeElapsedMs(track, s)
+    return if (elapsed > 0) s.distanceM / (elapsed / 1000.0) * 3.6 else 0.0
+}
+
 private fun shareText(track: TrackEntity, s: TrackSummary): String = buildString {
     appendLine("${track.title} – ${Fmt.dateTime(s.startedAt)}")
     appendLine("Dystans: ${Fmt.distance(s.distanceM)}")
-    appendLine("Czas całkowity: ${Fmt.duration(s.elapsedMs)} (w ruchu ${Fmt.duration(s.movingMs)})")
-    appendLine("Średnia: ${Fmt.speed(s.avgSpeedKmh)}, w ruchu ${Fmt.speed(s.avgMovingSpeedKmh)}")
+    appendLine("Czas całkowity: ${Fmt.duration(activeElapsedMs(track, s))} (w ruchu ${Fmt.duration(s.movingMs)})")
+    appendLine("Średnia: ${Fmt.speed(avgAllKmh(track, s))}, w ruchu ${Fmt.speed(s.avgMovingSpeedKmh)}")
     appendLine("Maks. prędkość: ${Fmt.speed(s.maxSpeedKmh)}")
     if (s.stops > 0) appendLine("Postoje: ${s.stops} (razem ${Fmt.duration(s.stoppedMs)})")
     append("Zapisano w KajakApp")
