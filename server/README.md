@@ -65,6 +65,8 @@ Wszystkie odpowiedzi to JSON. Błędy mają postać `{"error": "..."}`.
 | `POST /api/trips/{id}/gear`, `PATCH`, `DELETE .../gear/{gid}` | Wyposażenie (tylko uczestnicy; `assigned_to` musi być uczestnikiem spływu). `PATCH` przyjmuje `packed` i/lub `assigned_to` (`null` czyści przypisanie). |
 | `GET /api/trips/{id}/checkins`, `POST` | Zameldowania (tylko uczestnicy; można zameldować tylko siebie): `lat`, `lon`, opcjonalnie `fix_at`, `needs_help`, `client_id` (`person_name` opcjonalne, musi zgadzać się z kontem). Lista jest od najnowszego. |
 | `PATCH /api/trips/{id}/checkins/{cid}` | Odwołanie (lub ponowienie) wezwania pomocy: `{"needs_help": false}`. Tylko autor zameldowania – inni, także organizator, dostają 403. |
+| `PUT /api/trips/{id}/location` | Własna pozycja na żywo (`lat`, `lon`, opcjonalnie `fix_at`); tylko uczestnik. Trzymana w pamięci, wygasa po 15 min, nie trafia do pliku danych. |
+| `GET /api/trips/{id}/locations` | Pozycje uczestników: `username`, `lat`, `lon`, `fix_at`, `updated_at`, `needs_help`, `help_check_in_id`. Prośba o pomoc pochodzi z najnowszego zameldowania osoby z `needs_help`. |
 
 Wymagają logowania (nagłówek `Authorization: Bearer <token>`): wszystkie zapisy (trasy, przeszkody, głosy),
 lista i szczegóły spływów. Publiczne są tylko `GET` tras i przeszkód oraz `health`. Hasła są

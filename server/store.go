@@ -33,6 +33,10 @@ type Store struct {
 	path string // pusty = tylko pamięć
 	s    state
 	now  func() time.Time
+
+	// Chwilowe pozycje uczestników (tylko w pamięci); własna blokada, bo zapisujemy je często.
+	liveMu sync.Mutex
+	live   map[int64]map[string]LiveLocation
 }
 
 func OpenStore(path string) (*Store, error) {

@@ -24,9 +24,11 @@ import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.EdgeInsets
 import com.mapbox.maps.MapView
 import com.mapbox.maps.Style
+import com.mapbox.maps.extension.style.expressions.generated.Expression
 import com.mapbox.maps.extension.style.layers.addLayer
 import com.mapbox.maps.extension.style.layers.generated.circleLayer
 import com.mapbox.maps.extension.style.layers.generated.lineLayer
+import com.mapbox.maps.extension.style.layers.generated.symbolLayer
 import com.mapbox.maps.extension.style.layers.properties.generated.LineCap
 import com.mapbox.maps.extension.style.layers.properties.generated.LineJoin
 import com.mapbox.maps.extension.style.sources.addSource
@@ -37,20 +39,30 @@ import com.mapbox.maps.plugin.attribution.attribution
 import com.mapbox.maps.plugin.gestures.gestures
 import com.mapbox.maps.plugin.locationcomponent.createDefault2DPuck
 import com.mapbox.maps.plugin.logo.logo
+import com.mapbox.maps.plugin.scalebar.scalebar
 import com.mapbox.maps.plugin.locationcomponent.location
 import com.mapbox.maps.plugin.viewport.data.FollowPuckViewportStateBearing
 import com.mapbox.maps.plugin.viewport.data.FollowPuckViewportStateOptions
 import com.mapbox.maps.plugin.viewport.viewport
 import pl.kajakapp.R
+import pl.kajakapp.data.PersonOnMap
 import pl.kajakapp.domain.PathPoint
 
 private const val SRC_ROUTE = "kajak-route"
 private const val SRC_START = "kajak-start"
 private const val SRC_END = "kajak-end"
+private const val SRC_PEOPLE = "kajak-people"
+private const val SRC_HELP = "kajak-help"
+private const val LAYER_PEOPLE = "kajak-people-dot"
+private const val LAYER_PEOPLE_LABEL = "kajak-people-label"
+private const val LAYER_HELP_HALO = "kajak-help-halo"
+private const val LAYER_HELP = "kajak-help-dot"
+private const val LAYER_HELP_LABEL = "kajak-help-label"
 private const val LAYER_ROUTE = "kajak-route-line"
 private const val LAYER_START = "kajak-start-dot"
 private const val LAYER_END = "kajak-end-dot"
 
+private const val PEOPLE_COLOR = "#E08A00"
 private const val ROUTE_COLOR = "#0B5C73"
 private const val START_COLOR = "#2E7D32"
 private const val END_COLOR = "#C62828"
@@ -74,7 +86,12 @@ fun KajakMap(
     /** Przenosi logo i informację o źródłach map na górę (gdy dół ekranu zasłania panel). */
     ornamentsOnTop: Boolean = false,
     /** Zmiana tej wartości ponownie centruje mapę na użytkowniku (gdy włączone [followUser]). */
-    recenterKey: Int = 0
+    recenterKey: Int = 0,
+    /** Inni uczestnicy spływu; osoby z [PersonOnMap.needsHelp] są wyróżnione na czerwono. */
+    people: List<PersonOnMap> = emptyList(),
+    /** Punkt, na który ma przejść kamera po zmianie [focusKey] (np. osoba wzywająca pomocy). */
+    focus: PathPoint? = null,
+    focusKey: Int = 0
 ) {
     val context = LocalContext.current
     if (!hasMapToken(context)) {
@@ -91,13 +108,16 @@ fun KajakMap(
     val dark = isSystemInDarkTheme()
     // Zmiana motywu jasny/ciemny wczytuje mapę od nowa z pasującym stylem.
     key(dark) {
-        val state = remember { MapState() }
+        val state = remember { MapState().also { it.lastFocusKey = focusKey } }
         // Najnowsze parametry – wywołanie po wczytaniu stylu musi widzieć aktualne wartości, nie te z chwili utworzenia.
         state.path = path
         state.followUser = followUser
         state.fitPath = fitPath
         state.showEnds = showEnds
         state.recenterKey = recenterKey
+        state.people = people
+        state.focus = focus
+        state.focusKey = focusKey
         AndroidView(
             modifier = modifier,
             factory = { ctx ->
@@ -107,12 +127,19 @@ fun KajakMap(
                         rotateEnabled = false
                         pitchEnabled = false
                     }
+                    // Skala mapy jest zbędna – w jej miejscu aplikacja pokazuje wskaźnik GPS.
+                    view.scalebar.updateSettings { enabled = false }
                     if (ornamentsOnTop) {
-                        view.logo.updateSettings { position = Gravity.TOP or Gravity.START }
+                        val density = ctx.resources.displayMetrics.density
+                        view.logo.updateSettings {
+                            position = Gravity.TOP or Gravity.START
+                            marginTop = 52f * density
+                        }
                         view.attribution.updateSettings { position = Gravity.TOP or Gravity.END }
                     }
                     view.mapboxMap.loadStyle(if (dark) Style.DARK else Style.OUTDOORS) { style ->
                         addRouteLayers(style)
+                        addPeopleLayers(style)
                         state.styleReady = true
                         applyAll(view, state)
                     }
@@ -135,10 +162,19 @@ private class MapState {
     var fitPath = false
     var showEnds = false
     var recenterKey = 0
+    var people: List<PersonOnMap> = emptyList()
+    var focus: PathPoint? = null
+    var focusKey = 0
+    var lastFocusKey = 0
+
+    /** true, gdy kamera została przesunięta na wskazany punkt i nie wolno jej od razu wracać do śledzenia. */
+    var detached = false
 }
 
 private fun applyAll(view: MapView, state: MapState) {
     applyPath(view, state)
+    applyPeople(view, state)
+    applyFocus(view, state)
     applyFollow(view, state)
 }
 
@@ -149,6 +185,8 @@ private fun addRouteLayers(style: Style) {
     style.addSource(geoJsonSource(SRC_ROUTE) {})
     style.addSource(geoJsonSource(SRC_START) {})
     style.addSource(geoJsonSource(SRC_END) {})
+    style.addSource(geoJsonSource(SRC_PEOPLE) {})
+    style.addSource(geoJsonSource(SRC_HELP) {})
     style.addLayer(
         lineLayer(LAYER_ROUTE, SRC_ROUTE) {
             lineColor(ROUTE_COLOR)
@@ -172,6 +210,85 @@ private fun addRouteLayers(style: Style) {
             circleStrokeWidth(2.5)
             circleStrokeColor("#FFFFFF")
         }
+    )
+}
+
+private fun addPeopleLayers(style: Style) {
+    style.addLayer(
+        circleLayer(LAYER_PEOPLE, SRC_PEOPLE) {
+            circleRadius(8.0)
+            circleColor(PEOPLE_COLOR)
+            circleStrokeWidth(2.5)
+            circleStrokeColor("#FFFFFF")
+        }
+    )
+    style.addLayer(
+        symbolLayer(LAYER_PEOPLE_LABEL, SRC_PEOPLE) {
+            textField(Expression.get("name"))
+            textSize(12.0)
+            textOffset(listOf(0.0, -1.6))
+            textColor("#0F1D23")
+            textHaloColor("#FFFFFF")
+            textHaloWidth(1.5)
+            textAllowOverlap(true)
+            textIgnorePlacement(true)
+        }
+    )
+    // Osoba wzywająca pomocy: czerwony punkt z szerokim, półprzezroczystym halo.
+    style.addLayer(
+        circleLayer(LAYER_HELP_HALO, SRC_HELP) {
+            circleRadius(22.0)
+            circleColor(END_COLOR)
+            circleOpacity(0.3)
+        }
+    )
+    style.addLayer(
+        circleLayer(LAYER_HELP, SRC_HELP) {
+            circleRadius(10.0)
+            circleColor(END_COLOR)
+            circleStrokeWidth(3.0)
+            circleStrokeColor("#FFFFFF")
+        }
+    )
+    style.addLayer(
+        symbolLayer(LAYER_HELP_LABEL, SRC_HELP) {
+            textField(Expression.get("name"))
+            textSize(14.0)
+            textOffset(listOf(0.0, -2.2))
+            textColor(END_COLOR)
+            textHaloColor("#FFFFFF")
+            textHaloWidth(2.0)
+            textAllowOverlap(true)
+            textIgnorePlacement(true)
+        }
+    )
+}
+
+private fun personFeatures(list: List<PersonOnMap>): FeatureCollection {
+    val features = ArrayList<Feature>()
+    for (p in list) {
+        val f = Feature.fromGeometry(Point.fromLngLat(p.lon, p.lat))
+        f.addStringProperty("name", p.name)
+        features.add(f)
+    }
+    return FeatureCollection.fromFeatures(features)
+}
+
+private fun applyPeople(view: MapView, state: MapState) {
+    val style = view.mapboxMap.style ?: return
+    style.getSourceAs<GeoJsonSource>(SRC_PEOPLE)?.featureCollection(personFeatures(state.people.filter { !it.needsHelp }))
+    style.getSourceAs<GeoJsonSource>(SRC_HELP)?.featureCollection(personFeatures(state.people.filter { it.needsHelp }))
+}
+
+private fun applyFocus(view: MapView, state: MapState) {
+    if (state.focusKey == state.lastFocusKey) return
+    state.lastFocusKey = state.focusKey
+    val target = state.focus ?: return
+    // Własny ruch kamery zastępuje śledzenie użytkownika; „Pokaż moją pozycję” przywraca je.
+    view.viewport.idle()
+    state.detached = true
+    view.mapboxMap.setCamera(
+        CameraOptions.Builder().center(Point.fromLngLat(target.lon, target.lat)).zoom(16.0).build()
     )
 }
 
@@ -224,6 +341,8 @@ private fun applyFollow(view: MapView, state: MapState) {
     val follow = state.followUser
     val recenter = state.recenterKey != state.lastRecenterKey
     state.lastRecenterKey = state.recenterKey
+    if (recenter) state.detached = false
+    if (state.detached) return
     // Robimy to tylko przy zmianie, żeby kolejne odświeżenia nie odbierały użytkownikowi sterowania mapą.
     if (state.following == follow && !(recenter && follow)) return
     state.following = follow

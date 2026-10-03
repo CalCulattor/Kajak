@@ -207,6 +207,9 @@ interface TripDao {
     @Query("SELECT * FROM check_ins WHERE id = :id")
     suspend fun getCheckIn(id: Long): CheckInEntity?
 
+    @Query("SELECT * FROM check_ins WHERE serverId = :serverId LIMIT 1")
+    suspend fun findCheckInByServerId(serverId: Long): CheckInEntity?
+
     @Query("UPDATE check_ins SET needsHelp = :needsHelp WHERE id = :id")
     suspend fun setCheckInHelp(id: Long, needsHelp: Boolean)
 }

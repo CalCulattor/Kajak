@@ -79,6 +79,9 @@ func (srv *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/trips/{id}/checkins", srv.createCheckIn)
 	mux.HandleFunc("PATCH /api/trips/{id}/checkins/{cid}", srv.patchCheckIn)
 
+	mux.HandleFunc("PUT /api/trips/{id}/location", srv.putLocation)
+	mux.HandleFunc("GET /api/trips/{id}/locations", srv.listLocations)
+
 	return logRequests(mux)
 }
 

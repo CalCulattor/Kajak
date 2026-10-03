@@ -76,6 +76,10 @@ class TrackingService : Service() {
     private var lastStartId = 0
     private var lastNotificationAt = 0L
     private var lastNotificationPaused = false
+    private var lastShareAt = 0L
+
+    @Volatile
+    private var sharing = false
 
     private val listener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
@@ -192,6 +196,7 @@ class TrackingService : Service() {
                 try {
                     if (recorder.onFix(fix)) {
                         refreshNotification()
+                        shareLocation(fix)
                     } else {
                         commands.trySend(Command.Abort(lastStartId))
                     }
@@ -220,6 +225,24 @@ class TrackingService : Service() {
                 commands.trySend(Command.Stop(lastStartId))
             } catch (e: IllegalArgumentException) {
                 recorder.setGpsEnabled(false)
+            }
+        }
+    }
+
+    /** Co kilka sekund wysyła pozycję innym uczestnikom spływu (jeśli trasa jest przypisana do udostępnionego spływu). */
+    private fun shareLocation(fix: TrackPoint) {
+        val tripId = recorder.live.value?.tripId ?: return
+        val now = System.currentTimeMillis()
+        if (now - lastShareAt < SHARE_EVERY_MS) return
+        if (sharing) return
+        lastShareAt = now
+        sharing = true
+        // Osobna korutyna: wolna sieć nie może wstrzymywać zapisu odczytów GPS.
+        scope.launch {
+            try {
+                (application as KajakApp).container.sync.pushLocation(tripId, fix.lat, fix.lon, fix.time)
+            } finally {
+                sharing = false
             }
         }
     }
@@ -328,6 +351,7 @@ class TrackingService : Service() {
         private const val CHANNEL_ID = "tracking"
         private const val NOTIFICATION_ID = 42
         private const val NOTIFICATION_EVERY_MS = 10_000L
+        private const val SHARE_EVERY_MS = 10_000L
         private const val UPDATE_INTERVAL_MS = 3_000L
         private const val WAKE_LOCK_MAX_MS = 12 * 60 * 60 * 1000L
         private const val ACTION_START = "pl.kajakapp.tracking.START"

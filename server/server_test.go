@@ -408,3 +408,66 @@ func TestRequestBodyTooLarge(t *testing.T) {
 
 // futureDate zwraca datę za 30 dni (testy nie mogą zależeć od stałego kalendarza).
 func futureDate() string { return time.Now().UTC().AddDate(0, 0, 30).Format("2006-01-02") }
+
+func TestLiveLocationsAndHelp(t *testing.T) {
+	ts, _ := newTestServer(t, "")
+	_, body := call(t, "POST", ts.URL+"/api/trips", map[string]any{
+		"title": "Dunajec", "section_key": "dunajec", "start_date": futureDate(), "overnight": false,
+	})
+	var trip Trip
+	decodeInto(t, body, &trip)
+	tripURL := ts.URL + "/api/trips/" + itoa(trip.ID)
+
+	ola := authToken(t, ts.URL, "Ola")
+	if code, _ := callAs(t, ola, "POST", tripURL+"/participants", map[string]any{"car_seats": 0, "needs_kayak": false}); code != 201 {
+		t.Fatalf("Ola nie dołączyła: %d", code)
+	}
+	outsider := authToken(t, ts.URL, "Obcy")
+
+	// Pozycje zapisują i czytają tylko uczestnicy.
+	put := map[string]any{"lat": 49.4, "lon": 20.4}
+	if code, _ := callAs(t, outsider, "PUT", tripURL+"/location", put); code != 403 {
+		t.Errorf("obcy zapis: oczekiwano 403, jest %d", code)
+	}
+	if code, _ := callAs(t, outsider, "GET", tripURL+"/locations", nil); code != 403 {
+		t.Errorf("obcy odczyt: oczekiwano 403, jest %d", code)
+	}
+	if code, _ := callAs(t, ola, "PUT", tripURL+"/location", map[string]any{"lat": 99.0, "lon": 20.4}); code != 400 {
+		t.Errorf("zła szerokość: oczekiwano 400, jest %d", code)
+	}
+	if code, _ := callAs(t, ola, "PUT", tripURL+"/location", put); code != 204 {
+		t.Fatalf("zapis pozycji: %d", code)
+	}
+
+	var list []LocationView
+	_, body = call(t, "GET", tripURL+"/locations", nil)
+	decodeInto(t, body, &list)
+	if len(list) != 1 || list[0].Username != "Ola" || list[0].NeedsHelp {
+		t.Fatalf("lista pozycji: %+v", list)
+	}
+
+	// Wezwanie pomocy (zameldowanie z needs_help) oznacza osobę na liście.
+	code, body := callAs(t, ola, "POST", tripURL+"/checkins", map[string]any{
+		"client_id": "h1", "lat": 49.41, "lon": 20.41, "needs_help": true,
+	})
+	if code != 201 {
+		t.Fatalf("wezwanie pomocy: %d %s", code, body)
+	}
+	var ci CheckIn
+	decodeInto(t, body, &ci)
+	_, body = call(t, "GET", tripURL+"/locations", nil)
+	decodeInto(t, body, &list)
+	if len(list) != 1 || !list[0].NeedsHelp || list[0].HelpCheckInID != ci.ID {
+		t.Fatalf("pomoc na liście: %+v", list)
+	}
+
+	// Odwołanie pomocy zdejmuje oznaczenie.
+	if code, _ = callAs(t, ola, "PATCH", tripURL+"/checkins/"+itoa(ci.ID), map[string]any{"needs_help": false}); code != 200 {
+		t.Fatalf("odwołanie: %d", code)
+	}
+	_, body = call(t, "GET", tripURL+"/locations", nil)
+	decodeInto(t, body, &list)
+	if len(list) != 1 || list[0].NeedsHelp {
+		t.Fatalf("po odwołaniu: %+v", list)
+	}
+}
