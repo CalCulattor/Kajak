@@ -37,7 +37,7 @@ wyłącza synchronizację. „Testuj połączenie” sprawdza `GET /api/health`.
 |---|---|
 | Trasy | **+** na liście rzek → formularz. Trasa trafia na serwer (`POST /api/routes`); lista rzek przy wejściu i po kliknięciu odświeżenia wysyła lokalne trasy i pobiera trasy innych. Oznaczenie „Czeka na wysłanie na serwer”, dopóki się nie uda. |
 | Przeszkody | zgłoszenia i głosy „nadal tu jest” / „już usunięte” są wysyłane od razu; gdy nie ma sieci, czekają i idą przy następnym odświeżeniu odcinka. Liczniki z serwera zastępują lokalne. |
-| Spływy | po zalogowaniu nazwa konta jest automatycznie imieniem organizatora (bez pytania o imię). Ikona udostępniania wysyła spływ na serwer; potem ta sama ikona synchronizuje. **Spływy → Dołącz** pozwala dołączyć do spływu z serwera jako siebie. |
+| Spływy | po zalogowaniu nazwa konta jest automatycznie imieniem organizatora (bez pytania o imię). Ikona udostępniania wysyła spływ na serwer; potem ta sama ikona synchronizuje. **Spływy → Dołącz** pozwala dołączyć do spływu z serwera jako siebie. Spływ znika z listy następnego dnia po terminie (dane zostają na telefonie i na serwerze). |
 | Uprawnienia w spływie | usunąć spływ może tylko organizator (znika u wszystkich); uczestnik może tylko opuścić spływ (znika u niego z listy); każdy dodaje i edytuje tylko siebie; zameldować można tylko siebie. Spływ usunięty przez organizatora lub opuszczony znika z telefonu przy wejściu na listę spływów. |
 | Zameldowania | w udostępnionym spływie idą na serwer od razu; w nieudostępnionym zostają na telefonie. |
 

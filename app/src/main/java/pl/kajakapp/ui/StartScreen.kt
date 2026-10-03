@@ -470,7 +470,8 @@ fun StartScreen(
 
     if (showStart) {
         StartTrackDialog(
-            trips = state.trips,
+            // Spływy po terminie znikają z listy następnego dnia – tu też.
+            trips = state.trips.filter { it.startDateUtcMillis >= Fmt.todayUtcMidnight() },
             defaultTrip = contextTrip,
             onDismiss = { showStart = false },
             onStart = { title, trip ->

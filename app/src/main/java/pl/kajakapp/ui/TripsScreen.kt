@@ -55,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.delay
 import pl.kajakapp.data.db.SectionWithRiver
 import pl.kajakapp.util.Fmt
 
@@ -71,6 +72,16 @@ fun TripsScreen(onOpenTrip: (Long) -> Unit, onOpenSettings: () -> Unit) {
     val message by vm.message.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var showCreate by remember { mutableStateOf(false) }
+
+    // Spływ znika z listy następnego dnia po terminie (dane zostają na telefonie). Dzień sprawdzamy co minutę,
+    // żeby lista odświeżyła się też po północy przy otwartym ekranie.
+    var today by remember { mutableLongStateOf(Fmt.todayUtcMidnight()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(60_000L)
+            today = Fmt.todayUtcMidnight()
+        }
+    }
 
     // Spływy usunięte przez organizatora lub opuszczone znikają z telefonu przy wejściu na listę.
     LaunchedEffect(Unit) { vm.refresh() }
@@ -122,14 +133,14 @@ fun TripsScreen(onOpenTrip: (Long) -> Unit, onOpenSettings: () -> Unit) {
             }
         }
     ) { padding ->
-        val list = items
+        val list = items?.filter { it.trip.startDateUtcMillis >= today }
         when {
             list == null -> Box(Modifier.fillMaxSize().padding(padding), Alignment.Center) {
                 CircularProgressIndicator()
             }
             list.isEmpty() -> Box(Modifier.fillMaxSize().padding(padding), Alignment.Center) {
                 Text(
-                    "Nie masz jeszcze spływów.\nDotknij +, aby zaplanować spływ albo dołączyć do istniejącego.",
+                    "Nie masz nadchodzących spływów.\nDotknij +, aby zaplanować spływ albo dołączyć do istniejącego.",
                     modifier = Modifier.padding(32.dp)
                 )
             }
