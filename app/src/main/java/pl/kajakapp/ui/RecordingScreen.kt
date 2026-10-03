@@ -162,7 +162,7 @@ fun RecordingScreen(onBack: () -> Unit, onFinished: (trackId: Long?) -> Unit) {
                 BigStat("Średnia w ruchu", Fmt.speed(avg), Modifier.fillMaxWidth())
                 Text(
                     "Odczyty GPS: ${track.readings}" +
-                        (track.lastAccuracyM?.let { " · dokładność ok. ${it.toInt()} m" } ?: ""),
+                        (track.lastAccuracyM?.let { "\tdokładność ok. ${it.toInt()} m" } ?: ""),
                     style = MaterialTheme.typography.bodySmall
                 )
 

@@ -251,7 +251,7 @@ private fun TripSummary(
     val seats = participants.sumOf { it.carSeats }
     val people = participants.size
     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(date + if (overnight) " · z noclegiem" else " · jednodniowy", fontWeight = FontWeight.Medium)
+        Text(date + if (overnight) "\tz noclegiem" else "\tjednodniowy", fontWeight = FontWeight.Medium)
         sectionLabel?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         Text(
             if (shared) {
@@ -338,7 +338,7 @@ private fun ParticipantsTab(
                             if (localOnly) add("tylko na tym telefonie")
                         }
                         if (details.isNotEmpty()) {
-                            Text(details.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+                            Text(details.joinToString("\t"), style = MaterialTheme.typography.bodySmall)
                         }
                     }
                     if (shared && isOrganizer && !p.isOrganizer && p.serverId != null) {

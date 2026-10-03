@@ -74,18 +74,6 @@ fun HistoryScreen(
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            StatTile("Przepłynięte", Fmt.distance(state.totals.distanceM), Modifier.weight(1f))
-                            StatTile("Czas na wodzie", Fmt.duration(state.totals.elapsedMs), Modifier.weight(1f))
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            StatTile("Najdłuższa trasa", Fmt.distance(state.totals.longestM), Modifier.weight(1f))
-                            StatTile("Najwyższa prędkość", Fmt.speed(state.totals.topSpeedKmh), Modifier.weight(1f))
-                        }
-                    }
-                }
                 groups.forEach { (month, tracks) ->
                     item(key = "month_$month") { SectionTitle(month) }
                     items(tracks, key = { it.id }) { track ->
@@ -115,7 +103,7 @@ fun TrackRow(track: TrackEntity, onClick: () -> Unit) {
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    Fmt.dateTime(track.startedAt) + (track.tripTitle?.let { " · $it" } ?: ""),
+                    Fmt.dateTime(track.startedAt) + (track.tripTitle?.let { "\t$it" } ?: ""),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -125,7 +113,7 @@ fun TrackRow(track: TrackEntity, onClick: () -> Unit) {
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(Fmt.distance(track.distanceM), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                 Text(
-                    "${Fmt.duration(track.elapsedMs)} · ${Fmt.speed(avg)}",
+                    "${Fmt.duration(track.elapsedMs)}\t${Fmt.speed(avg)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

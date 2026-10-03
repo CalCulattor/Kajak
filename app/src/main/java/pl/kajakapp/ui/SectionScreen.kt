@@ -182,8 +182,8 @@ fun SectionScreen(sectionId: Long, onBack: () -> Unit) {
                                 Text(o.type.label, fontWeight = FontWeight.Bold)
                                 if (o.description.isNotBlank()) Text(o.description)
                                 Text(
-                                    "Zgłoszono ${Fmt.dateTime(o.reportedAt)} · potwierdzeń: ${o.confirmations}" +
-                                        " · zgłoszeń usunięcia: ${o.removalVotes}",
+                                    "Zgłoszono ${Fmt.dateTime(o.reportedAt)}\tpotwierdzeń: ${o.confirmations}" +
+                                        "\tzgłoszeń usunięcia: ${o.removalVotes}",
                                     style = MaterialTheme.typography.bodySmall
                                 )
                                 if (item.stale) {
@@ -260,12 +260,12 @@ private fun WaterCard(
                     water.waterTempC?.let { Text("Temperatura wody: ${num1(it)} °C") }
                     if (water.warningCm != null || water.alarmCm != null) {
                         Text(
-                            "Stan ostrzegawczy: ${water.warningCm ?: "–"} cm · alarmowy: ${water.alarmCm ?: "–"} cm",
+                            "Stan ostrzegawczy: ${water.warningCm ?: "–"} cm\talarmowy: ${water.alarmCm ?: "–"} cm",
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
                     Text(
-                        "Pomiar: ${water.levelMeasuredAt ?: "brak daty"} · pobrano ${Fmt.ageText(water.fetchedAt)}",
+                        "Pomiar: ${water.levelMeasuredAt ?: "brak daty"}\tpobrano ${Fmt.ageText(water.fetchedAt)}",
                         style = MaterialTheme.typography.bodySmall
                     )
                     if (stale) {
