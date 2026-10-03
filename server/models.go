@@ -19,6 +19,34 @@ var obstacleTypes = map[string]bool{
 // bo lokalne identyfikatory z bazy telefonu różnią się między urządzeniami.
 var sectionKeyRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
+// Typ rzeki i trudność są takie same jak w aplikacji (enumy RiverType i Difficulty).
+var riverTypes = map[string]bool{"LOWLAND": true, "MOUNTAIN": true}
+
+var difficulties = map[string]bool{
+	"FLAT": true, "WW1": true, "WW2": true, "WW3": true, "WW4": true, "WW5": true,
+}
+
+// Route to trasa (odcinek rzeki) dodana przez użytkownika i widoczna dla wszystkich.
+// Key jest nadawany przez serwer i jest stabilnym identyfikatorem odcinka
+// (używają go przeszkody i spływy).
+type Route struct {
+	Key         string    `json:"key"`
+	ClientID    string    `json:"client_id,omitempty"`
+	RiverName   string    `json:"river_name"`
+	Region      string    `json:"region"`
+	RiverType   string    `json:"river_type"`
+	Name        string    `json:"name"`
+	LengthKm    float64   `json:"length_km"`
+	Difficulty  string    `json:"difficulty"`
+	PutIn       string    `json:"put_in"`
+	TakeOut     string    `json:"take_out"`
+	Lat         float64   `json:"lat"`
+	Lon         float64   `json:"lon"`
+	StationName string    `json:"station_name,omitempty"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 // Takie same reguły jak w aplikacji (ObstacleRules): przeszkoda znika po co najmniej
 // dwóch zgłoszeniach usunięcia, gdy jest ich więcej niż potwierdzeń.
 const removalVotesNeeded = 2

@@ -45,7 +45,11 @@ data class SectionEntity(
     val lat: Double,
     val lon: Double,
     val stationName: String?,
-    val description: String
+    val description: String,
+    /** Stabilny klucz odcinka na serwerze (null = odcinek tylko lokalny, jeszcze niewysłany). */
+    val serverKey: String? = null,
+    /** true = odcinek dodany w aplikacji, który czeka na wysłanie na serwer. */
+    @ColumnInfo(defaultValue = "0") val pendingSync: Boolean = false
 )
 
 /** Wynik zapytania łączącego odcinek z nazwą rzeki. */
@@ -77,8 +81,14 @@ data class ObstacleEntity(
     val lastVerifiedAt: Long,
     val confirmations: Int = 1,
     val removalVotes: Int = 0,
-    /** Hak pod przyszłą synchronizację z serwerem (backend nie jest częścią tego projektu). */
-    val pendingSync: Boolean = true
+    /** true = zgłoszenie jeszcze nie trafiło na serwer. */
+    val pendingSync: Boolean = true,
+    /** Identyfikator przeszkody na serwerze (null = niewysłana). */
+    val serverId: Long? = null,
+    /** Głosy „nadal tu jest” złożone offline, czekające na wysłanie. */
+    @ColumnInfo(defaultValue = "0") val pendingConfirms: Int = 0,
+    /** Głosy „już usunięte” złożone offline, czekające na wysłanie. */
+    @ColumnInfo(defaultValue = "0") val pendingRemovals: Int = 0
 )
 
 @Entity(tableName = "water_cache")
@@ -136,7 +146,9 @@ data class TripEntity(
     val startDateUtcMillis: Long,
     val overnight: Boolean,
     val organizer: String,
-    val notes: String
+    val notes: String,
+    /** Identyfikator spływu na serwerze (null = spływ tylko lokalny). */
+    val serverId: Long? = null
 )
 
 @Entity(
@@ -157,7 +169,8 @@ data class ParticipantEntity(
     val name: String,
     /** Liczba miejsc w aucie tej osoby, wraz z kierowcą (0 = nie jedzie autem). */
     val carSeats: Int,
-    val needsKayak: Boolean
+    val needsKayak: Boolean,
+    val serverId: Long? = null
 )
 
 @Entity(
@@ -177,7 +190,8 @@ data class GearItemEntity(
     val tripId: Long,
     val name: String,
     val assignedTo: String? = null,
-    val packed: Boolean = false
+    val packed: Boolean = false,
+    val serverId: Long? = null
 )
 
 @Entity(
@@ -202,6 +216,7 @@ data class CheckInEntity(
     val fixAt: Long,
     val createdAt: Long,
     val needsHelp: Boolean,
-    /** Hak pod przyszłą synchronizację z serwerem (backend nie jest częścią tego projektu). */
-    val pendingSync: Boolean = true
+    /** true = zameldowanie jeszcze nie trafiło na serwer. */
+    val pendingSync: Boolean = true,
+    val serverId: Long? = null
 )

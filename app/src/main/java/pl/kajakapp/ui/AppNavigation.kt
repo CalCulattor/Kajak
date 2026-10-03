@@ -26,6 +26,8 @@ private object Routes {
     const val TRIPS = "trips"
     const val SECTION = "section/{id}"
     const val TRIP = "trip/{id}"
+    const val ADD_ROUTE = "route/new"
+    const val SETTINGS = "settings"
     const val ARG_ID = "id"
 
     fun section(id: Long) = "section/$id"
@@ -73,10 +75,30 @@ fun KajakAppRoot() {
             modifier = Modifier.padding(padding)
         ) {
             composable(Routes.RIVERS) {
-                RiversScreen(onOpenSection = { nav.navigate(Routes.section(it)) })
+                RiversScreen(
+                    onOpenSection = { nav.navigate(Routes.section(it)) },
+                    onAddRoute = { nav.navigate(Routes.ADD_ROUTE) },
+                    onOpenSettings = { nav.navigate(Routes.SETTINGS) }
+                )
             }
             composable(Routes.TRIPS) {
-                TripsScreen(onOpenTrip = { nav.navigate(Routes.trip(it)) })
+                TripsScreen(
+                    onOpenTrip = { nav.navigate(Routes.trip(it)) },
+                    onOpenSettings = { nav.navigate(Routes.SETTINGS) }
+                )
+            }
+            composable(Routes.ADD_ROUTE) {
+                AddRouteScreen(
+                    onBack = { nav.popBackStack() },
+                    onSaved = { sectionId ->
+                        // Wracamy do listy rzek (tam startuje wysyłka) i otwieramy nową trasę.
+                        nav.popBackStack()
+                        nav.navigate(Routes.section(sectionId))
+                    }
+                )
+            }
+            composable(Routes.SETTINGS) {
+                SettingsScreen(onBack = { nav.popBackStack() })
             }
             composable(
                 route = Routes.SECTION,

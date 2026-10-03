@@ -34,7 +34,8 @@ object SeedData {
                     lat = 49.4,
                     lon = 20.4,
                     stationName = "Sromowce Wyżne",
-                    description = "Przykładowy odcinek. Sprawdź lokalne zasady (przystanie, flisacy) i aktualny stan wody."
+                    description = "Przykładowy odcinek. Sprawdź lokalne zasady (przystanie, flisacy) i aktualny stan wody.",
+                    serverKey = "dunajec-sromowce-szczawnica"
                 )
             )
         ),
@@ -56,7 +57,8 @@ object SeedData {
                     lat = 53.75,
                     lon = 21.4,
                     stationName = null,
-                    description = "Przykładowy odcinek bez przypisanego wodowskazu – możesz go ustawić na ekranie odcinka."
+                    description = "Przykładowy odcinek bez przypisanego wodowskazu – możesz go ustawić na ekranie odcinka.",
+                    serverKey = "krutynia-sorkwity-ukta"
                 )
             )
         )

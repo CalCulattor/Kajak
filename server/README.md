@@ -47,6 +47,8 @@ Wszystkie odpowiedzi to JSON. Błędy mają postać `{"error": "..."}`.
 | Metoda i ścieżka | Opis |
 | --- | --- |
 | `GET /api/health` | Sprawdzenie, czy serwer działa. |
+| `GET /api/routes`, `POST /api/routes` | Lista tras i dodanie trasy (`river_name`, `region`, `river_type` = `LOWLAND`/`MOUNTAIN`, `name`, `length_km`, `difficulty` = `FLAT`/`WW1`…`WW5`, `put_in`, `take_out`, `lat`, `lon`, `description`, opcjonalnie `station_name`, `client_id`). Serwer nadaje stabilny `key` (np. `drawa-drawno-zlocieniec-7`), którego używają przeszkody i spływy. |
+| `GET /api/routes/{key}` | Pojedyncza trasa. |
 | `GET /api/sections/{key}/obstacles` | Aktywne przeszkody odcinka (`?include_inactive=true` pokazuje też usunięte). |
 | `POST /api/sections/{key}/obstacles` | Zgłoszenie przeszkody: `type`, `description`, opcjonalnie `lat` i `lon` oraz `client_id`. |
 | `POST /api/obstacles/{id}/confirm` | „Nadal tu jest”. |

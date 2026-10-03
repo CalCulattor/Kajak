@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -14,6 +15,7 @@ var errNotFound = errors.New("nie znaleziono")
 
 type state struct {
 	NextID       int64         `json:"next_id"`
+	Routes       []Route       `json:"routes"`
 	Obstacles    []Obstacle    `json:"obstacles"`
 	Trips        []Trip        `json:"trips"`
 	Participants []Participant `json:"participants"`
@@ -104,6 +106,50 @@ func (st *Store) saveLocked() error {
 		return err
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------- Trasy
+
+// AddRoute dodaje trasę i nadaje jej klucz (slug nazwy + numer). Gdy podano ClientID,
+// który już istnieje, zwraca istniejącą trasę (created=false).
+func (st *Store) AddRoute(r Route) (out Route, created bool, err error) {
+	err = st.mutate(func(s *state) error {
+		if r.ClientID != "" {
+			for _, e := range s.Routes {
+				if e.ClientID == r.ClientID {
+					out = e
+					return nil
+				}
+			}
+		}
+		id := st.nextIDIn(s)
+		r.Key = slugify(r.RiverName+" "+r.Name, 50) + "-" + strconv.FormatInt(id, 10)
+		r.CreatedAt = st.now()
+		s.Routes = append(s.Routes, r)
+		out = r
+		created = true
+		return nil
+	})
+	return
+}
+
+func (st *Store) ListRoutes() []Route {
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	out := make([]Route, len(st.s.Routes))
+	copy(out, st.s.Routes)
+	return out
+}
+
+func (st *Store) GetRoute(key string) (Route, error) {
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	for _, r := range st.s.Routes {
+		if r.Key == key {
+			return r, nil
+		}
+	}
+	return Route{}, errNotFound
 }
 
 // ---------------------------------------------------------------- Przeszkody

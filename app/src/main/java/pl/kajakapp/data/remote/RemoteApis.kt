@@ -88,6 +88,17 @@ object Network {
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
 
+    @Volatile
+    private var serverCache: Pair<String, KajakServerApi>? = null
+
+    /** Klient serwera KajakApp dla podanego adresu bazowego (musi kończyć się znakiem „/”). */
+    fun server(baseUrl: String): KajakServerApi {
+        serverCache?.let { if (it.first == baseUrl) return it.second }
+        val api = retrofit(baseUrl).create(KajakServerApi::class.java)
+        serverCache = baseUrl to api
+        return api
+    }
+
     val imgw: ImgwApi by lazy { retrofit("https://danepubliczne.imgw.pl/").create(ImgwApi::class.java) }
 
     val openMeteo: OpenMeteoApi by lazy {

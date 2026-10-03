@@ -37,6 +37,10 @@ func (srv *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/health", srv.health)
 
+	mux.HandleFunc("GET /api/routes", srv.listRoutes)
+	mux.HandleFunc("POST /api/routes", srv.createRoute)
+	mux.HandleFunc("GET /api/routes/{key}", srv.getRoute)
+
 	mux.HandleFunc("GET /api/sections/{key}/obstacles", srv.listObstacles)
 	mux.HandleFunc("POST /api/sections/{key}/obstacles", srv.createObstacle)
 	mux.HandleFunc("POST /api/obstacles/{id}/confirm", srv.voteObstacle(true))
@@ -147,6 +151,89 @@ func (r *statusRecorder) WriteHeader(code int) {
 
 func (srv *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ---------------------------------------------------------------- trasy
+
+func (srv *Server) listRoutes(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, srv.store.ListRoutes())
+}
+
+func (srv *Server) getRoute(w http.ResponseWriter, r *http.Request) {
+	rt, err := srv.store.GetRoute(r.PathValue("key"))
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rt)
+}
+
+type createRouteRequest struct {
+	ClientID    string  `json:"client_id"`
+	RiverName   string  `json:"river_name"`
+	Region      string  `json:"region"`
+	RiverType   string  `json:"river_type"`
+	Name        string  `json:"name"`
+	LengthKm    float64 `json:"length_km"`
+	Difficulty  string  `json:"difficulty"`
+	PutIn       string  `json:"put_in"`
+	TakeOut     string  `json:"take_out"`
+	Lat         float64 `json:"lat"`
+	Lon         float64 `json:"lon"`
+	StationName string  `json:"station_name"`
+	Description string  `json:"description"`
+}
+
+func (srv *Server) createRoute(w http.ResponseWriter, r *http.Request) {
+	var req createRouteRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	req.RiverName = strings.TrimSpace(req.RiverName)
+	req.Region = strings.TrimSpace(req.Region)
+	req.Name = strings.TrimSpace(req.Name)
+	req.PutIn = strings.TrimSpace(req.PutIn)
+	req.TakeOut = strings.TrimSpace(req.TakeOut)
+	req.StationName = strings.TrimSpace(req.StationName)
+	req.Description = strings.TrimSpace(req.Description)
+
+	switch {
+	case req.RiverName == "" || !validText(req.RiverName, 80):
+		writeError(w, http.StatusBadRequest, "river_name jest wymagane (do 80 znaków)")
+	case req.Name == "" || !validText(req.Name, 120):
+		writeError(w, http.StatusBadRequest, "name jest wymagane (do 120 znaków)")
+	case !validText(req.Region, 80) || !validText(req.PutIn, 120) || !validText(req.TakeOut, 120) ||
+		!validText(req.StationName, 80):
+		writeError(w, http.StatusBadRequest, "region, put_in, take_out lub station_name jest za długie")
+	case !validText(req.Description, maxTextRunes):
+		writeError(w, http.StatusBadRequest, "description jest za długie")
+	case !riverTypes[req.RiverType]:
+		writeError(w, http.StatusBadRequest, "nieznany river_type: "+req.RiverType)
+	case !difficulties[req.Difficulty]:
+		writeError(w, http.StatusBadRequest, "nieznana difficulty: "+req.Difficulty)
+	case math.IsNaN(req.LengthKm) || req.LengthKm < 0 || req.LengthKm > 1000:
+		writeError(w, http.StatusBadRequest, "length_km musi być w zakresie 0-1000")
+	case !validLatLon(req.Lat, req.Lon):
+		writeError(w, http.StatusBadRequest, "współrzędne poza zakresem")
+	case len(req.ClientID) > maxClientIDLen:
+		writeError(w, http.StatusBadRequest, "client_id jest za długi")
+	default:
+		rt, created, err := srv.store.AddRoute(Route{
+			ClientID: req.ClientID, RiverName: req.RiverName, Region: req.Region,
+			RiverType: req.RiverType, Name: req.Name, LengthKm: req.LengthKm,
+			Difficulty: req.Difficulty, PutIn: req.PutIn, TakeOut: req.TakeOut,
+			Lat: req.Lat, Lon: req.Lon, StationName: req.StationName, Description: req.Description,
+		})
+		if err != nil {
+			storeError(w, err)
+			return
+		}
+		status := http.StatusCreated
+		if !created {
+			status = http.StatusOK
+		}
+		writeJSON(w, status, rt)
+	}
 }
 
 // ---------------------------------------------------------------- przeszkody
