@@ -242,7 +242,9 @@ data class TrackEntity(
     val elapsedMs: Long = 0,
     val movingMs: Long = 0,
     val maxSpeedKmh: Double = 0.0,
-    val pointCount: Int = 0
+    val pointCount: Int = 0,
+    /** Łączny czas wstrzymania trasy (pauzy), wliczony w czas między pierwszym a ostatnim odczytem. */
+    @ColumnInfo(defaultValue = "0") val pausedMs: Long = 0
 )
 
 @Entity(

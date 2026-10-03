@@ -26,8 +26,17 @@ data class LiveTrack(
     val lastFixAt: Long? = null,
     val lastAccuracyM: Float? = null,
     /** false, gdy GPS jest wyłączony w telefonie. */
-    val gpsEnabled: Boolean = true
-)
+    val gpsEnabled: Boolean = true,
+    /** Łączny czas dotychczasowych pauz (zakończonych). */
+    val pausedMs: Long = 0,
+    /** Kiedy rozpoczęła się trwająca pauza; null, gdy trasa nie jest wstrzymana. */
+    val pausedSince: Long? = null
+) {
+    val paused: Boolean get() = pausedSince != null
+
+    /** Czas trasy bez pauz w chwili [now] (przy pauzie zatrzymany). */
+    fun activeElapsedMs(now: Long): Long = ((pausedSince ?: now) - startedAt - pausedMs).coerceAtLeast(0)
+}
 
 /**
  * Wynik zakończenia: [trackId] == null oznacza, że trasa była zbyt krótka i została odrzucona.
@@ -52,6 +61,18 @@ class TrackRecorder(
     private var gpsEnabled = true
     private var lastAccuracy: Float? = null
     private var maxLiveSpeed = 0.0
+
+    // Pauza: odczyty GPS w czasie pauzy są pomijane, a jej czas nie wlicza się do czasu trasy.
+    private var pausedSince: Long? = null
+
+    /** Wszystkie pauzy – do licznika czasu na żywo. */
+    private var pausedTotal = 0L
+
+    /** Pauzy zakończone, po których nie było jeszcze przyjętego odczytu (mogą leżeć za końcem trasy). */
+    private var pausePending = 0L
+
+    /** Pauzy leżące między pierwszym a ostatnim przyjętym odczytem – tylko one skracają czas trasy. */
+    private var pausedInRange = 0L
 
     private val _live = MutableStateFlow<LiveTrack?>(null)
     val live: StateFlow<LiveTrack?> = _live
@@ -134,6 +155,10 @@ class TrackRecorder(
         this.startedAt = startedAt
         lastAccuracy = null
         maxLiveSpeed = 0.0
+        pausedSince = null
+        pausedTotal = 0L
+        pausePending = 0L
+        pausedInRange = 0L
     }
 
     /**
@@ -142,9 +167,17 @@ class TrackRecorder(
      */
     suspend fun onFix(p: TrackPoint): Boolean = mutex.withLock {
         val id = trackId ?: return@withLock false
+        if (pausedSince != null) return@withLock true // trasa wstrzymana – odczyt pomijamy
         dao.insertPoint(TrackPointEntity(trackId = id, time = p.time, lat = p.lat, lon = p.lon, accuracy = p.accuracy))
         // Na mapie rysujemy tylko odczyty, które przyjął też algorytm trasy (bez skoków i słabych fixów).
-        if (acc.add(p) && appendPath(p.lat, p.lon)) _livePath.value = ArrayList(path)
+        val lastBefore = acc.lastFixAt
+        val created = acc.add(p)
+        if (acc.lastFixAt != lastBefore) {
+            // Odczyt przyjęty: oczekujące pauzy leżą teraz między odczytami (pauza przed pierwszym – poza trasą).
+            if (lastBefore != null) pausedInRange += pausePending
+            pausePending = 0L
+        }
+        if (created && appendPath(p.lat, p.lon)) _livePath.value = ArrayList(path)
         lastAccuracy = p.accuracy
         val speed = acc.currentSpeedMs(p.time) * 3.6
         if (speed > maxLiveSpeed) maxLiveSpeed = speed
@@ -164,6 +197,23 @@ class TrackRecorder(
         return true
     }
 
+    /** Wstrzymuje albo wznawia trasę w toku. Bez trasy w toku nic nie robi. */
+    suspend fun setPaused(paused: Boolean) = mutex.withLock {
+        if (trackId == null) return@withLock
+        val since = pausedSince
+        if (paused && since == null) {
+            pausedSince = clock()
+        } else if (!paused && since != null) {
+            val length = (clock() - since).coerceAtLeast(0)
+            pausedTotal += length
+            pausePending += length
+            pausedSince = null
+        } else {
+            return@withLock
+        }
+        publish(clock())
+    }
+
     fun setGpsEnabled(enabled: Boolean) {
         gpsEnabled = enabled
         _live.update { it?.copy(gpsEnabled = enabled) }
@@ -177,12 +227,14 @@ class TrackRecorder(
             startedAt = startedAt,
             distanceM = acc.distanceM,
             movingMs = acc.movingMs,
-            speedKmh = acc.currentSpeedMs(now) * 3.6,
+            speedKmh = if (pausedSince != null) 0.0 else acc.currentSpeedMs(now) * 3.6,
             maxSpeedKmh = maxLiveSpeed,
             readings = acc.usedPoints,
             lastFixAt = acc.lastFixAt,
             lastAccuracyM = lastAccuracy,
-            gpsEnabled = gpsEnabled
+            gpsEnabled = gpsEnabled,
+            pausedMs = pausedTotal,
+            pausedSince = pausedSince
         )
     }
 
@@ -205,6 +257,7 @@ class TrackRecorder(
             ?: return FinishResult(null)
         val entity = dao.getTrack(id)
         val summary = acc.summary()
+        val savedPause = pausedInRange
         val saved = if (entity == null || summary.distanceM < MIN_SAVE_DISTANCE_M || !summary.hasData) {
             dao.deleteTrack(id)
             FinishResult(null)
@@ -213,7 +266,9 @@ class TrackRecorder(
                 entity.copy(
                     endedAt = maxOf(summary.endedAt, entity.startedAt),
                     distanceM = summary.distanceM,
-                    elapsedMs = summary.elapsedMs,
+                    // Pauza po ostatnim odczycie nie leży między odczytami, więc jej nie odejmujemy.
+                    elapsedMs = (summary.elapsedMs - savedPause).coerceAtLeast(0),
+                    pausedMs = savedPause,
                     movingMs = summary.movingMs,
                     maxSpeedKmh = summary.maxSpeedKmh,
                     pointCount = summary.usedPoints

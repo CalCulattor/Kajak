@@ -75,6 +75,7 @@ class TrackingService : Service() {
     @Volatile
     private var lastStartId = 0
     private var lastNotificationAt = 0L
+    private var lastNotificationPaused = false
 
     private val listener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
@@ -266,15 +267,24 @@ class TrackingService : Service() {
 
     private fun refreshNotification() {
         val now = System.currentTimeMillis()
-        if (now - lastNotificationAt < NOTIFICATION_EVERY_MS) return
-        lastNotificationAt = now
         val live = recorder.live.value ?: return
-        val text = "%.2f km\t%.1f km/h".format(live.distanceM / 1000.0, live.speedKmh)
+        // Zmiana pauzy odświeża powiadomienie od razu; poza tym ograniczamy częstotliwość.
+        if (live.paused == lastNotificationPaused && now - lastNotificationAt < NOTIFICATION_EVERY_MS) return
+        lastNotificationAt = now
+        lastNotificationPaused = live.paused
+        val stats = "%.2f km\t%.1f km/h".format(live.distanceM / 1000.0, live.speedKmh)
+        val text = if (live.paused) "Wstrzymano\t$stats" else stats
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
-            .notify(NOTIFICATION_ID, buildNotification(live.title, text, live.startedAt))
+            .notify(NOTIFICATION_ID, buildNotification(live.title, text, live.startedAt, live.paused, live.pausedMs))
     }
 
-    private fun buildNotification(title: String, text: String?, startedAt: Long): Notification {
+    private fun buildNotification(
+        title: String,
+        text: String?,
+        startedAt: Long,
+        paused: Boolean = false,
+        pausedMs: Long = 0
+    ): Notification {
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
@@ -287,8 +297,9 @@ class TrackingService : Service() {
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setContentTitle("Nagrywanie trasy: $title")
             .setContentText(text ?: "Czekam na sygnał GPS…")
-            .setWhen(startedAt)
-            .setUsesChronometer(true)
+            // Stoper w powiadomieniu nie liczy pauz (przy pauzie jest wyłączony).
+            .setWhen(startedAt + pausedMs)
+            .setUsesChronometer(!paused)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(open)
