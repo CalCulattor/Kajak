@@ -32,7 +32,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -78,7 +77,7 @@ fun TrackDetailScreen(trackId: Long, onBack: () -> Unit) {
     Scaffold(
         contentWindowInsets = NoInsets,
         topBar = {
-            TopAppBar(
+            AppTopBar(
                 windowInsets = NoInsets,
                 title = { Text(track?.title ?: "Trasa", maxLines = 1) },
                 navigationIcon = {

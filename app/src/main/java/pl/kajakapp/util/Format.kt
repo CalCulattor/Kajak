@@ -46,6 +46,13 @@ object Fmt {
 
     private val clockPattern = DateTimeFormatter.ofPattern("HH:mm")
 
+    private val monthPattern = DateTimeFormatter.ofPattern("LLLL yyyy", java.util.Locale.forLanguageTag("pl"))
+
+    /** Miesiąc i rok po polsku, np. "Październik 2026" (do nagłówków grup w historii). */
+    fun monthYear(millis: Long): String =
+        monthPattern.withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(millis))
+            .replaceFirstChar { it.uppercase() }
+
     /** Godzina lokalna, np. "14:05". */
     fun clock(millis: Long): String =
         clockPattern.withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(millis))

@@ -21,7 +21,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -114,7 +113,7 @@ fun AddRouteScreen(onBack: () -> Unit, onSaved: (Long) -> Unit) {
     Scaffold(
         contentWindowInsets = NoInsets,
         topBar = {
-            TopAppBar(
+            AppTopBar(
                 windowInsets = NoInsets,
                 title = { Text("Nowa trasa") },
                 navigationIcon = {

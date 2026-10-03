@@ -1,25 +1,30 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
 package pl.kajakapp.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Surface
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,10 +49,78 @@ import pl.kajakapp.util.LocationHelper
 /** Zewnętrzny Scaffold obsługuje marginesy systemowe, więc ekrany wewnętrzne ich nie dublują. */
 val NoInsets = WindowInsets(0, 0, 0, 0)
 
+/** Płaski pasek tytułu w kolorze tła – bez cieni i zmiany koloru przy przewijaniu. */
 @Composable
-fun KajakTheme(content: @Composable () -> Unit) {
-    val colors = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
-    MaterialTheme(colorScheme = colors, content = content)
+fun AppTopBar(
+    title: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    navigationIcon: @Composable () -> Unit = {},
+    actions: @Composable RowScope.() -> Unit = {},
+    windowInsets: WindowInsets = NoInsets
+) {
+    TopAppBar(
+        title = title,
+        modifier = modifier,
+        navigationIcon = navigationIcon,
+        actions = actions,
+        windowInsets = windowInsets,
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.background,
+            scrolledContainerColor = MaterialTheme.colorScheme.background,
+            titleContentColor = MaterialTheme.colorScheme.onBackground,
+            actionIconContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            navigationIconContentColor = MaterialTheme.colorScheme.onSurface
+        )
+    )
+}
+
+/** Kafelek z jedną wartością (np. dystans): mała etykieta nad dużą liczbą. */
+@Composable
+fun StatTile(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    note: String? = null
+) {
+    Surface(
+        modifier = modifier,
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh
+    ) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            if (note != null) {
+                Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+fun SectionTitle(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text,
+        modifier = modifier.padding(top = 8.dp),
+        style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.onSurface
+    )
+}
+
+/** Pusty ekran: krótko mówi, co tu będzie, i podpowiada pierwszy krok. */
+@Composable
+fun EmptyState(title: String, message: String, modifier: Modifier = Modifier, action: (@Composable () -> Unit)? = null) {
+    Column(
+        modifier = modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 40.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(title, style = MaterialTheme.typography.titleLarge)
+        Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (action != null) {
+            Spacer(Modifier.height(4.dp))
+            action()
+        }
+    }
 }
 
 @Composable
@@ -66,6 +139,7 @@ fun RiskBanner(assessment: RiskAssessment?, modifier: Modifier = Modifier) {
     val level = assessment?.level ?: RiskLevel.UNKNOWN
     Card(
         modifier = modifier,
+        shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(
             containerColor = riskColor(level),
             contentColor = Color.White
@@ -116,7 +190,12 @@ fun <T> ChoiceButton(
 
 @Composable
 fun PrimaryAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
-    Button(onClick = onClick, modifier = modifier, enabled = enabled) { Text(text) }
+    Button(
+        onClick = onClick,
+        modifier = modifier.height(52.dp),
+        enabled = enabled,
+        shape = MaterialTheme.shapes.medium
+    ) { Text(text, style = MaterialTheme.typography.labelLarge) }
 }
 
 /**

@@ -8,6 +8,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -31,6 +32,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 
 private object Routes {
+    const val START = "start"
     const val RIVERS = "rivers"
     const val TRIPS = "trips"
     const val HISTORY = "history"
@@ -61,7 +63,7 @@ fun KajakAppRoot() {
     val nav = rememberNavController()
     val backStackEntry by nav.currentBackStackEntryAsState()
     val route = backStackEntry?.destination?.route
-    val showBottomBar = route == Routes.RIVERS || route == Routes.TRIPS || route == Routes.HISTORY
+    val showBottomBar = route == Routes.START || route == Routes.RIVERS || route == Routes.TRIPS || route == Routes.HISTORY
     val container = rememberContainer()
     val recording by container.recorder.live.collectAsStateWithLifecycle()
 
@@ -71,7 +73,8 @@ fun KajakAppRoot() {
                 // Pasek przypominający o trwającym nagrywaniu (widoczny na wszystkich zakładkach).
                 recording?.let { live ->
                     Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
                         modifier = Modifier.fillMaxWidth().clickable { nav.navigate(Routes.RECORDING) { launchSingleTop = true } }
                     ) {
                         Text(
@@ -83,10 +86,16 @@ fun KajakAppRoot() {
                 }
                 NavigationBar {
                     NavigationBarItem(
-                        selected = route == Routes.RIVERS,
-                        onClick = { nav.switchTab(Routes.RIVERS) },
-                        icon = { Icon(Icons.Default.Place, contentDescription = null) },
-                        label = { Text("Rzeki") }
+                        selected = route == Routes.START,
+                        onClick = { nav.switchTab(Routes.START) },
+                        icon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
+                        label = { Text("Start") }
+                    )
+                    NavigationBarItem(
+                        selected = route == Routes.HISTORY,
+                        onClick = { nav.switchTab(Routes.HISTORY) },
+                        icon = { Icon(Icons.Default.DateRange, contentDescription = null) },
+                        label = { Text("Historia") }
                     )
                     NavigationBarItem(
                         selected = route == Routes.TRIPS,
@@ -95,10 +104,10 @@ fun KajakAppRoot() {
                         label = { Text("Spływy") }
                     )
                     NavigationBarItem(
-                        selected = route == Routes.HISTORY,
-                        onClick = { nav.switchTab(Routes.HISTORY) },
-                        icon = { Icon(Icons.Default.DateRange, contentDescription = null) },
-                        label = { Text("Historia") }
+                        selected = route == Routes.RIVERS,
+                        onClick = { nav.switchTab(Routes.RIVERS) },
+                        icon = { Icon(Icons.Default.Place, contentDescription = null) },
+                        label = { Text("Rzeki") }
                     )
                 }
             }
@@ -106,9 +115,16 @@ fun KajakAppRoot() {
     ) { padding ->
         NavHost(
             navController = nav,
-            startDestination = Routes.RIVERS,
+            startDestination = Routes.START,
             modifier = Modifier.padding(padding)
         ) {
+            composable(Routes.START) {
+                StartScreen(
+                    onOpenTrack = { nav.navigate(Routes.track(it)) },
+                    onOpenRecording = { nav.navigate(Routes.RECORDING) { launchSingleTop = true } },
+                    onOpenSettings = { nav.navigate(Routes.SETTINGS) }
+                )
+            }
             composable(Routes.RIVERS) {
                 RiversScreen(
                     onOpenSection = { nav.navigate(Routes.section(it)) },
@@ -125,7 +141,6 @@ fun KajakAppRoot() {
             composable(Routes.HISTORY) {
                 HistoryScreen(
                     onOpenTrack = { nav.navigate(Routes.track(it)) },
-                    onOpenRecording = { nav.navigate(Routes.RECORDING) { launchSingleTop = true } },
                     onOpenSettings = { nav.navigate(Routes.SETTINGS) }
                 )
             }
