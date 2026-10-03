@@ -38,6 +38,8 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
@@ -145,7 +147,7 @@ fun TripsScreen(onOpenTrip: (Long) -> Unit, onOpenSettings: () -> Unit) {
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                Fmt.utcDate(item.trip.startDateUtcMillis) +
+                                Fmt.utcDate(item.trip.startDateUtcMillis) + Fmt.timeSuffix(item.trip.startTime) +
                                     if (item.trip.overnight) "\tz noclegiem" else "\tjednodniowy"
                             )
                             item.sectionLabel?.let {
@@ -175,9 +177,9 @@ fun TripsScreen(onOpenTrip: (Long) -> Unit, onOpenSettings: () -> Unit) {
             accountName = username,
             sections = sections,
             onDismiss = { showCreate = false },
-            onCreate = { title, sectionId, date, overnight, organizer ->
+            onCreate = { title, sectionId, date, startTime, overnight, organizer ->
                 showCreate = false
-                vm.create(title, sectionId, date, overnight, organizer, onCreated = onOpenTrip)
+                vm.create(title, sectionId, date, startTime, overnight, organizer, onCreated = onOpenTrip)
             }
         )
     }
@@ -234,7 +236,7 @@ private fun CreateTripDialog(
     accountName: String?,
     sections: List<SectionWithRiver>,
     onDismiss: () -> Unit,
-    onCreate: (title: String, sectionId: Long?, dateUtcMillis: Long, overnight: Boolean, organizer: String) -> Unit
+    onCreate: (title: String, sectionId: Long?, dateUtcMillis: Long, startTime: String, overnight: Boolean, organizer: String) -> Unit
 ) {
     var title by remember { mutableStateOf("") }
     var organizer by remember { mutableStateOf("") }
@@ -242,6 +244,11 @@ private fun CreateTripDialog(
     var overnight by remember { mutableStateOf(false) }
     var dateMillis by remember { mutableLongStateOf(Fmt.todayUtcMidnight()) }
     var showDatePicker by remember { mutableStateOf(false) }
+    var startTime by remember { mutableStateOf("") }
+    var showTimePicker by remember { mutableStateOf(false) }
+    // Dziś nie można wybrać godziny, która już minęła (data to dzień lokalny zapisany jako północ UTC).
+    val timeInPast = startTime.isNotEmpty() && dateMillis == Fmt.todayUtcMidnight() &&
+        startTime < java.time.LocalTime.now().let { "%02d:%02d".format(it.hour, it.minute) }
 
     val selectedSectionLabel = sections.firstOrNull { it.section.id == sectionId }
         ?.let { "${it.riverName}: ${it.section.name}" }
@@ -280,6 +287,16 @@ private fun CreateTripDialog(
                 OutlinedButton(onClick = { showDatePicker = true }) {
                     Text("Data: ${Fmt.utcDate(dateMillis)}")
                 }
+                OutlinedButton(onClick = { showTimePicker = true }) {
+                    Text(if (startTime.isEmpty()) "Godzina: nie podano" else "Godzina: $startTime")
+                }
+                if (timeInPast) {
+                    Text(
+                        "Ta godzina już minęła – wybierz późniejszą albo inny dzień.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Switch(checked = overnight, onCheckedChange = { overnight = it })
                     Text("  Nocleg przy rzece", style = MaterialTheme.typography.bodyMedium)
@@ -289,12 +306,42 @@ private fun CreateTripDialog(
         confirmButton = {
             TextButton(
                 enabled = title.isNotBlank() && (accountName != null || organizer.isNotBlank()) &&
-                    dateMillis >= Fmt.todayUtcMidnight(),
-                onClick = { onCreate(title, sectionId, dateMillis, overnight, organizer) }
+                    dateMillis >= Fmt.todayUtcMidnight() && !timeInPast,
+                onClick = { onCreate(title, sectionId, dateMillis, startTime, overnight, organizer) }
             ) { Text("Utwórz") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Anuluj") } }
     )
+
+    if (showTimePicker) {
+        val initial = remember {
+            startTime.takeIf { it.length == 5 }?.let { it.substring(0, 2).toInt() to it.substring(3).toInt() }
+                ?: (9 to 0)
+        }
+        val timeState = rememberTimePickerState(initialHour = initial.first, initialMinute = initial.second, is24Hour = true)
+        AlertDialog(
+            onDismissRequest = { showTimePicker = false },
+            title = { Text("Godzina startu") },
+            text = { TimePicker(state = timeState) },
+            confirmButton = {
+                TextButton(onClick = {
+                    startTime = "%02d:%02d".format(timeState.hour, timeState.minute)
+                    showTimePicker = false
+                }) { Text("OK") }
+            },
+            dismissButton = {
+                Row {
+                    if (startTime.isNotEmpty()) {
+                        TextButton(onClick = {
+                            startTime = ""
+                            showTimePicker = false
+                        }) { Text("Usuń godzinę") }
+                    }
+                    TextButton(onClick = { showTimePicker = false }) { Text("Anuluj") }
+                }
+            }
+        )
+    }
 
     if (showDatePicker) {
         // Terminu spływu nie można ustawić w przeszłości.

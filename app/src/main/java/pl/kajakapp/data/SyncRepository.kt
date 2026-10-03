@@ -396,6 +396,7 @@ class SyncRepository(
                             title = trip.title,
                             sectionKey = sectionKey,
                             startDate = toIsoDate(trip.startDateUtcMillis),
+                            startTime = trip.startTime,
                             overnight = trip.overnight,
                             notes = trip.notes
                         )
@@ -620,6 +621,7 @@ class SyncRepository(
                     title = detail.trip.title,
                     sectionId = sectionId,
                     startDateUtcMillis = fromIsoDate(detail.trip.startDate, trip.startDateUtcMillis),
+                    startTime = detail.trip.startTime,
                     overnight = detail.trip.overnight,
                     organizer = detail.trip.organizer.ifBlank { trip.organizer },
                     ownerUsername = detail.trip.organizer.ifBlank { trip.ownerUsername },
@@ -761,6 +763,7 @@ class SyncRepository(
                         title = detail.trip.title,
                         sectionId = sectionId,
                         startDateUtcMillis = fromIsoDate(detail.trip.startDate, System.currentTimeMillis()),
+                        startTime = detail.trip.startTime,
                         overnight = detail.trip.overnight,
                         organizer = detail.trip.organizer,
                         notes = detail.trip.notes,

@@ -90,6 +90,7 @@ data class TripDto(
     val title: String,
     @SerialName("section_key") val sectionKey: String? = null,
     @SerialName("start_date") val startDate: String,
+    @SerialName("start_time") val startTime: String = "",
     val overnight: Boolean = false,
     val organizer: String = "",
     val notes: String = ""
@@ -100,6 +101,7 @@ data class TripRequest(
     val title: String,
     @SerialName("section_key") val sectionKey: String? = null,
     @SerialName("start_date") val startDate: String,
+    @SerialName("start_time") val startTime: String = "",
     val overnight: Boolean,
     val notes: String
 )

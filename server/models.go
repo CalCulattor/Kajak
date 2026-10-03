@@ -81,7 +81,8 @@ type Trip struct {
 	ID         int64     `json:"id"`
 	Title      string    `json:"title"`
 	SectionKey *string   `json:"section_key,omitempty"`
-	StartDate  string    `json:"start_date"` // YYYY-MM-DD
+	StartDate  string    `json:"start_date"`           // YYYY-MM-DD
+	StartTime  string    `json:"start_time,omitempty"` // GG:MM (czas lokalny uczestników); puste = nie podano
 	Overnight  bool      `json:"overnight"`
 	Organizer  string    `json:"organizer"` // w odpowiedziach: pierwszy aktualny organizator (twórca, jeśli nadal nim jest)
 	Organizers []string  `json:"organizers,omitempty"`

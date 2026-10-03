@@ -386,6 +386,7 @@ class TripsViewModel(
         title: String,
         sectionId: Long?,
         startDateUtcMillis: Long,
+        startTime: String,
         overnight: Boolean,
         organizer: String,
         onCreated: (Long) -> Unit
@@ -397,6 +398,7 @@ class TripsViewModel(
                 title = title,
                 sectionId = sectionId,
                 startDateUtcMillis = startDateUtcMillis,
+                startTime = startTime,
                 overnight = overnight,
                 organizer = account ?: organizer,
                 ownerUsername = account

@@ -338,6 +338,24 @@ func TestTripAndCheckInValidation(t *testing.T) {
 		t.Errorf("pusty tytuł: %d", code)
 	}
 
+	code, _ = call(t, "POST", ts.URL+"/api/trips", map[string]any{
+		"title": "T", "start_date": futureDate(), "start_time": "25:00",
+	})
+	if code != 400 {
+		t.Errorf("zła godzina: %d", code)
+	}
+	code, body0 := call(t, "POST", ts.URL+"/api/trips", map[string]any{
+		"title": "Z godziną", "start_date": futureDate(), "start_time": "09:30",
+	})
+	if code != 201 && code != 200 {
+		t.Fatalf("spływ z godziną: %d", code)
+	}
+	var timed Trip
+	decodeInto(t, body0, &timed)
+	if timed.StartTime != "09:30" {
+		t.Errorf("start_time = %q", timed.StartTime)
+	}
+
 	_, body := call(t, "POST", ts.URL+"/api/trips", map[string]any{
 		"title": "T", "start_date": futureDate(),
 	})
