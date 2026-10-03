@@ -81,6 +81,11 @@ object Network {
             .build()
     }
 
+    /** Klient długiego połączenia SSE; serwer wysyła sygnał życia co 20 s, więc 65 s ciszy oznacza zerwanie. */
+    val streamClient: OkHttpClient by lazy {
+        client.newBuilder().readTimeout(65, TimeUnit.SECONDS).build()
+    }
+
     private fun retrofit(baseUrl: String): Retrofit =
         Retrofit.Builder()
             .baseUrl(baseUrl)

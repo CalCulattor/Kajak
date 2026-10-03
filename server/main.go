@@ -37,13 +37,17 @@ func run(args []string) error {
 		return fmt.Errorf("nie można nasłuchiwać na %s: %w", cfg.Addr(), err)
 	}
 
+	api := NewServer(store)
 	httpSrv := &http.Server{
-		Handler:           NewServer(store).Handler(),
+		Handler:           api.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+
+	// Strumienie zdarzeń na żywo nie kończą się same, więc przy zamykaniu trzeba je przerwać.
+	httpSrv.RegisterOnShutdown(api.hub.CloseAll)
 
 	log.Printf("serwer KajakApp: http://%s (dane: %s)", ln.Addr(), cfg.DataFile)
 	if !cfg.IsLoopback() {

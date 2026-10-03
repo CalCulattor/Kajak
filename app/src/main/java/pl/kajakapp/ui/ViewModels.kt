@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import pl.kajakapp.data.ConditionsRepository
 import pl.kajakapp.data.FetchStatus
+import pl.kajakapp.data.LiveUpdates
 import pl.kajakapp.data.RefreshResult
 import pl.kajakapp.data.RemoteTripInfo
 import pl.kajakapp.data.RiverRepository
@@ -297,7 +298,8 @@ class TripsViewModel(
     private val trips: TripRepository,
     rivers: RiverRepository,
     private val sync: SyncRepository,
-    private val settings: ServerSettings
+    private val settings: ServerSettings,
+    live: LiveUpdates
 ) : ViewModel() {
 
     /** Zalogowany użytkownik albo null; jego nazwa jest używana jako imię organizatora. */
@@ -323,6 +325,21 @@ class TripsViewModel(
     /** null = okno zamknięte. */
     private val _join = MutableStateFlow<JoinUiState?>(null)
     val join: StateFlow<JoinUiState?> = _join
+
+    init {
+        // Gdy ktoś inny doda lub usunie spływ, otwarta lista „Dołącz” odświeża się sama.
+        viewModelScope.launch {
+            live.tripsChanged.collect {
+                val open = _join.value
+                if (open != null && !open.loading) {
+                    val result = sync.listRemoteTrips()
+                    if (_join.value?.loading == false && result.outcome.ok) {
+                        _join.value = _join.value?.copy(trips = result.trips)
+                    }
+                }
+            }
+        }
+    }
 
     fun openJoin() {
         _join.value = JoinUiState(loading = true)

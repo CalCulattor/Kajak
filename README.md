@@ -51,6 +51,8 @@ inny serwer usuwa z telefonu kopie spływów poprzedniego konta.
 Trasy wymagają serwera z endpointem `/api/routes` (jest w `server/`; starsza wersja serwera zwróci 404
 i aplikacja pokaże komunikat).
 
+Aktualizacje na żywo: gdy aplikacja jest na ekranie i jesteś zalogowany, trzyma połączenie z serwerem (`GET /api/events`). Kiedy ktoś dołączy do spływu, doda sprzęt, zamelduje się albo zgłosi przeszkodę, Twój telefon sam pobiera zmianę – bez ręcznego odświeżania. Po zerwaniu połączenia aplikacja łączy się ponownie i nadrabia zaległości. Przy spływie widać, kto jest organizatorem.
+
 ## Czego jeszcze nie ma (świadomie)
 
 - **Map offline** i rysowania trasy na mapie (pozycje otwierają się w zewnętrznej aplikacji map).

@@ -155,6 +155,7 @@ fun TripDetailScreen(tripId: Long, onBack: () -> Unit) {
                         participants = state.participants,
                         shared = trip.serverId != null,
                         currentUser = state.currentUser,
+                        organizer = trip.ownerUsername ?: trip.organizer,
                         onAdd = vm::addParticipant,
                         onUpdateMine = vm::updateMyData,
                         onRemove = vm::removeParticipant
@@ -269,6 +270,7 @@ private fun ParticipantsTab(
     participants: List<ParticipantEntity>,
     shared: Boolean,
     currentUser: String?,
+    organizer: String,
     onAdd: (name: String, carSeats: Int, needsKayak: Boolean) -> Unit,
     onUpdateMine: (carSeats: Int, needsKayak: Boolean) -> Unit,
     onRemove: (Long) -> Unit
@@ -297,7 +299,9 @@ private fun ParticipantsTab(
                 }
             }
         }
-        items(participants, key = { it.id }) { p ->
+        // Organizator zawsze na początku listy.
+        items(participants.sortedByDescending { it.name.equals(organizer, ignoreCase = true) }, key = { it.id }) { p ->
+            val isOrganizer = p.name.equals(organizer, ignoreCase = true)
             val isMe = shared && p.name.equals(currentUser, ignoreCase = true)
             val localOnly = shared && p.serverId == null && !isMe
             Card(Modifier.fillMaxWidth()) {
@@ -307,6 +311,14 @@ private fun ParticipantsTab(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(p.name + if (isMe) " (Ty)" else "", fontWeight = FontWeight.Bold)
+                        if (isOrganizer) {
+                            Text(
+                                "Organizator",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                         val details = buildList {
                             if (p.carSeats > 0) add("auto: ${p.carSeats} miejsc")
                             if (p.needsKayak) add("potrzebuje kajaka")

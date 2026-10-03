@@ -407,6 +407,20 @@ class SyncRepository(
         }
     }
 
+    /** Synchronizuje spływ wskazany identyfikatorem z serwera (zdarzenia „na żywo”); nieznane pomija. */
+    suspend fun syncTripByServerId(serverId: Long): SyncOutcome {
+        if (!enabled || !loggedIn) return disabled
+        val local = tripDao.findTripByServerId(serverId) ?: return disabled
+        return syncTrip(local.id)
+    }
+
+    /** Odświeża przeszkody odcinka wskazanego kluczem z serwera; nieznane odcinki pomija. */
+    suspend fun syncObstaclesByKey(sectionKey: String): SyncOutcome {
+        if (!enabled) return disabled
+        val section = riverDao.findSectionByKey(sectionKey) ?: return disabled
+        return syncObstacles(section.id)
+    }
+
     /** Synchronizuje wszystkie spływy udostępnione na serwerze (wykrywa usunięcia i wyjścia). */
     suspend fun syncSharedTrips(): SyncOutcome {
         if (!enabled || !loggedIn) return SyncOutcome(true, "")
