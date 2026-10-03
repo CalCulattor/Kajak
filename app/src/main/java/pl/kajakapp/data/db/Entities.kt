@@ -145,6 +145,8 @@ data class TripEntity(
     /** Północ UTC wybranego dnia (tak zwraca DatePicker). */
     val startDateUtcMillis: Long,
     val overnight: Boolean,
+    /** Godzina startu „GG:MM” (czas lokalny); pusty tekst = nie podano. */
+    val startTime: String = "",
     val organizer: String,
     val notes: String,
     /** Identyfikator spływu na serwerze (null = spływ tylko lokalny). */

@@ -128,6 +128,7 @@ class TripRepository(db: AppDatabase) {
         title: String,
         sectionId: Long?,
         startDateUtcMillis: Long,
+        startTime: String,
         overnight: Boolean,
         organizer: String,
         ownerUsername: String?
@@ -137,6 +138,7 @@ class TripRepository(db: AppDatabase) {
                 title = title.trim(),
                 sectionId = sectionId,
                 startDateUtcMillis = startDateUtcMillis,
+                startTime = startTime,
                 overnight = overnight,
                 organizer = organizer.trim(),
                 notes = "",

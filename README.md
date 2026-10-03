@@ -1,4 +1,4 @@
-# KajakApp
+# Eddy
 
 Aplikacja na Androida (Kotlin, Jetpack Compose, Room, Retrofit) dla kajakarzy: stan wody,
 pogoda z oceną ryzyka, przeszkody zgłaszane przez społeczność oraz organizacja spływów.
@@ -111,7 +111,7 @@ Podczas nagrywania panel na ekranie Start ma przyciski „Wstrzymaj/Wznów” i 
 
 ## Współdzielenie pozycji i wezwanie pomocy
 
-- Mapa na ekranie Start dotyczy jednego **spływu z serwera**: tego, do którego przypisano nagrywaną trasę, wybranego ręcznie (przycisk z nazwą spływu u góry mapy) albo – domyślnie – najbliższego terminem. Okno „trwającego” spływu to dzień przed startem do 4 dni po. Okno „Rozpocznij trasę” domyślnie przypisuje trasę do tego spływu, a pozycja jest udostępniana tylko dla spływu trwającego (dzień przed startem do 4 dni po), wybranego ręcznie albo już nagrywanego.
+- Mapa na ekranie Start dotyczy jednego **spływu z serwera**: tego, do którego przypisano nagrywaną trasę, wybranego ręcznie albo – domyślnie – najbliższego terminem. Okno „trwającego” spływu to dzień przed startem do 4 dni po. Okno „Rozpocznij trasę” domyślnie przypisuje trasę do tego spływu, a pozycja jest udostępniana tylko dla spływu trwającego (dzień przed startem do 4 dni po), wybranego ręcznie albo już nagrywanego.
 - Swoją pozycję (`PUT /api/trips/{id}/location`) wysyła co ok. 10 s usługa nagrywania (gdy trasa jest przypisana do spływu) albo – bez nagrywania – sam ekran Start, dopóki aplikacja jest na ekranie. Ekran Start co 8 s pobiera pozycje pozostałych uczestników i rysuje je na mapie (pomarańczowe punkty z nazwami). Osoba, która nie ma otwartej aplikacji (lub nie ma uprawnienia lokalizacji), nie jest widoczna – pozycje wygasają na serwerze po 15 min.
 - Problemy (brak sieci, stary serwer bez `/locations`, brak uczestnictwa) pokazują się nad panelem trasy zamiast być ukrywane. Wezwania pomocy są pokazywane także z danych zapisanych na telefonie, gdy serwer nie odpowiada.
 - Ikona ostrzeżenia obok ustawień na ekranie Start wzywa pomoc: po potwierdzeniu zapisuje zameldowanie z `needs_help` i wysyła je do spływu. Pozostali uczestnicy widzą czerwony baner „… wzywa pomocy!”, a osoba jest podświetlona na mapie na czerwono (przycisk „Pokaż na mapie” przenosi kamerę). Autor może wezwanie odwołać z banera. Powiadomienia działają, gdy aplikacja jest otwarta; zdalne powiadomienia push (aplikacja w tle) wymagałyby np. Firebase Cloud Messaging i nie są częścią tej wersji.
