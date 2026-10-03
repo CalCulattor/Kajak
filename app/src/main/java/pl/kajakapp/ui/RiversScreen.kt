@@ -2,7 +2,7 @@
 
 package pl.kajakapp.ui
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -117,29 +118,37 @@ fun RiversScreen(
                             )
                             Text(item.river.description, style = MaterialTheme.typography.bodyMedium)
                             item.sections.forEach { section ->
-                                Column(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .clickable { onOpenSection(section.id) }
-                                        .padding(vertical = 8.dp)
+                                // Odcinek w ramce, żeby odróżnić go od nazwy rzeki.
+                                Surface(
+                                    onClick = { onOpenSection(section.id) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = MaterialTheme.shapes.medium,
+                                    color = MaterialTheme.colorScheme.surface,
+                                    border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.55f))
                                 ) {
-                                    Text(section.name, fontWeight = FontWeight.Medium)
-                                    if (section.pendingSync) {
+                                    Column(
+                                        Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Text(section.name, fontWeight = FontWeight.Medium)
+                                        if (section.pendingSync) {
+                                            Text(
+                                                "Czeka na wysłanie na serwer",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.error
+                                            )
+                                        }
                                         Text(
-                                            "Czeka na wysłanie na serwer",
+                                            String.format(
+                                                Locale.forLanguageTag("pl-PL"),
+                                                "%.1f km · %s",
+                                                section.lengthKm,
+                                                section.difficulty.label
+                                            ),
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.error
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
-                                    Text(
-                                        String.format(
-                                            Locale.forLanguageTag("pl-PL"),
-                                            "%.1f km · %s",
-                                            section.lengthKm,
-                                            section.difficulty.label
-                                        ),
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
                                 }
                             }
                         }

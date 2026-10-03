@@ -19,7 +19,7 @@ import androidx.compose.ui.unit.sp
  * Motyw KajakApp.
  *
  * Kolory: chłodne, jasne tło (woda w słońcu), głęboki błękit jako kolor główny i jeden mocny akcent –
- * pomarańcz kamizelki ratunkowej (tertiary) – zarezerwowany dla nagrywania trasy, żeby najważniejsza
+ * zieleń "start" (tertiary) – zarezerwowany dla nagrywania trasy, żeby najważniejsza
  * czynność była widoczna z daleka, także w słońcu i mokrymi rękami.
  * Liczby (dystans, czas, prędkość) mają cyfry o stałej szerokości, więc nie "pływają" podczas odświeżania.
  */
@@ -33,10 +33,10 @@ private val LightColors = lightColorScheme(
     onSecondary = Color(0xFFFFFFFF),
     secondaryContainer = Color(0xFFD3E6EC),
     onSecondaryContainer = Color(0xFF0F232B),
-    tertiary = Color(0xFFCC4408),
+    tertiary = Color(0xFF0E7C59),
     onTertiary = Color(0xFFFFFFFF),
-    tertiaryContainer = Color(0xFFFFDBC9),
-    onTertiaryContainer = Color(0xFF3B1400),
+    tertiaryContainer = Color(0xFFC7F0DE),
+    onTertiaryContainer = Color(0xFF00241A),
     error = Color(0xFFBA1A1A),
     onError = Color(0xFFFFFFFF),
     errorContainer = Color(0xFFFFDAD6),
@@ -65,10 +65,10 @@ private val DarkColors = darkColorScheme(
     onSecondary = Color(0xFF1C333A),
     secondaryContainer = Color(0xFF2F454C),
     onSecondaryContainer = Color(0xFFD3E6EC),
-    tertiary = Color(0xFFFF9B66),
-    onTertiary = Color(0xFF4A1B00),
-    tertiaryContainer = Color(0xFF8F3200),
-    onTertiaryContainer = Color(0xFFFFDBC9),
+    tertiary = Color(0xFF5FD9A8),
+    onTertiary = Color(0xFF00382A),
+    tertiaryContainer = Color(0xFF00513C),
+    onTertiaryContainer = Color(0xFFC7F0DE),
     error = Color(0xFFFFB4AB),
     onError = Color(0xFF690005),
     errorContainer = Color(0xFF93000A),

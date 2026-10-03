@@ -48,7 +48,7 @@ class KajakApp : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this, appScope)
-        appScope.launch { container.rivers.seedIfEmpty() }
+        appScope.launch { container.rivers.seedMissing() }
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: Activity) {
                 started++

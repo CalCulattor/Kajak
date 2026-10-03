@@ -96,14 +96,19 @@ class RiverRepository(private val db: AppDatabase) {
     suspend fun voteObstacleRemoved(id: Long) =
         obstacleDao.voteRemoved(id, System.currentTimeMillis())
 
-    /** Wstawia dane startowe tylko do pustej bazy. */
-    suspend fun seedIfEmpty() {
-        if (dao.countRivers() > 0) return
+    /**
+     * Wstawia dane startowe: całą bazę do pustej, a przy aktualizacji aplikacji tylko brakujące
+     * odcinki znanych rzek (rozpoznawane po kluczu odcinka). Niczego nie nadpisuje ani nie usuwa.
+     */
+    suspend fun seedMissing() {
         db.withTransaction {
-            if (dao.countRivers() > 0) return@withTransaction
             for (seed in SeedData.rivers) {
-                val riverId = dao.insertRiver(seed.river)
-                dao.insertSections(seed.sections.map { it.copy(riverId = riverId) })
+                val riverId = dao.findRiver(seed.river.name, seed.river.region)?.id
+                    ?: dao.insertRiver(seed.river)
+                val missing = seed.sections.filter { s ->
+                    s.serverKey == null || dao.findSectionByKey(s.serverKey) == null
+                }
+                if (missing.isNotEmpty()) dao.insertSections(missing.map { it.copy(riverId = riverId) })
             }
         }
     }
@@ -184,6 +189,8 @@ class TripRepository(db: AppDatabase) {
     suspend fun setGearPacked(id: Long, packed: Boolean) = dao.setGearPacked(id, packed)
     suspend fun assignGear(id: Long, assignee: String?) = dao.assignGear(id, assignee)
     suspend fun removeGear(id: Long) = dao.deleteGear(id)
+
+    suspend fun setCheckInHelp(id: Long, needsHelp: Boolean) = dao.setCheckInHelp(id, needsHelp)
 
     suspend fun checkIn(
         tripId: Long,

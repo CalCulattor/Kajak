@@ -565,6 +565,14 @@ class TripDetailViewModel(
         }
     }
 
+    /** Odwołuje wezwanie pomocy (UI pokazuje przycisk tylko jego autorowi, serwer też to sprawdza). */
+    fun cancelHelp(checkInId: Long) {
+        viewModelScope.launch {
+            val result = sync.cancelHelp(checkInId)
+            if (!result.ok && result.message.isNotEmpty()) message.value = result.message
+        }
+    }
+
     fun checkIn(personName: String, point: GeoPoint, needsHelp: Boolean) {
         viewModelScope.launch {
             trips.checkIn(tripId, personName, point.lat, point.lon, point.fixAt, needsHelp)

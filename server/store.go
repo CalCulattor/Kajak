@@ -615,3 +615,24 @@ func (st *Store) ListCheckIns(tripID int64) ([]CheckIn, error) {
 	}
 	return out, nil
 }
+
+// SetCheckInHelp zmienia znacznik prośby o pomoc; tylko autor zameldowania (user) może to zrobić.
+func (st *Store) SetCheckInHelp(tripID, id int64, user string, needsHelp bool) (CheckIn, error) {
+	var out CheckIn
+	err := st.mutate(func(s *state) error {
+		for i := range s.CheckIns {
+			c := &s.CheckIns[i]
+			if c.ID != id || c.TripID != tripID {
+				continue
+			}
+			if !strings.EqualFold(c.PersonName, user) {
+				return errForbidden
+			}
+			c.NeedsHelp = needsHelp
+			out = *c
+			return nil
+		}
+		return errNotFound
+	})
+	return out, err
+}

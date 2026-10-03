@@ -163,6 +163,9 @@ data class CheckInRequest(
 )
 
 @Serializable
+data class CheckInHelpRequest(@SerialName("needs_help") val needsHelp: Boolean)
+
+@Serializable
 data class TripDetailDto(
     val trip: TripDto,
     val participants: List<ParticipantDto> = emptyList(),
@@ -240,6 +243,13 @@ interface KajakServerApi {
 
     @POST("api/trips/{id}/checkins")
     suspend fun addCheckIn(@Path("id") tripId: Long, @Body body: CheckInRequest): CheckInDto
+
+    @PATCH("api/trips/{id}/checkins/{cid}")
+    suspend fun patchCheckIn(
+        @Path("id") tripId: Long,
+        @Path("cid") id: Long,
+        @Body body: CheckInHelpRequest
+    ): CheckInDto
 }
 
 // ---------------------------------------------------------------- konta

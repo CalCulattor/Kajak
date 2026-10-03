@@ -14,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -84,29 +85,38 @@ fun KajakAppRoot() {
                         )
                     }
                 }
+                val tabColors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = MaterialTheme.colorScheme.onPrimary,
+                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                    indicatorColor = MaterialTheme.colorScheme.primary
+                )
                 NavigationBar {
                     NavigationBarItem(
                         selected = route == Routes.START,
                         onClick = { nav.switchTab(Routes.START) },
                         icon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
+                        colors = tabColors,
                         label = { Text("Start") }
                     )
                     NavigationBarItem(
                         selected = route == Routes.HISTORY,
                         onClick = { nav.switchTab(Routes.HISTORY) },
                         icon = { Icon(Icons.Default.DateRange, contentDescription = null) },
+                        colors = tabColors,
                         label = { Text("Historia") }
                     )
                     NavigationBarItem(
                         selected = route == Routes.TRIPS,
                         onClick = { nav.switchTab(Routes.TRIPS) },
                         icon = { Icon(Icons.Default.Person, contentDescription = null) },
+                        colors = tabColors,
                         label = { Text("Spływy") }
                     )
                     NavigationBarItem(
                         selected = route == Routes.RIVERS,
                         onClick = { nav.switchTab(Routes.RIVERS) },
                         icon = { Icon(Icons.Default.Place, contentDescription = null) },
+                        colors = tabColors,
                         label = { Text("Rzeki") }
                     )
                 }
