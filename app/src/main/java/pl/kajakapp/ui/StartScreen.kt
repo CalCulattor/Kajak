@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -36,6 +37,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -65,6 +68,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -73,6 +77,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import pl.kajakapp.data.PersonOnMap
+import pl.kajakapp.util.LocationHelper
 import pl.kajakapp.domain.PathPoint
 import pl.kajakapp.data.LiveTrack
 import pl.kajakapp.data.db.TrackEntity
@@ -86,6 +91,7 @@ import kotlin.math.max
 private var askedAtEntry = false
 
 private const val PEOPLE_REFRESH_MS = 8_000L
+private const val SHARE_REFRESH_MS = 10_000L
 private const val GPS_FRESH_MS = 15_000L
 private const val STARTING_WAIT_MS = 8_000L
 private const val STOPPING_WAIT_MS = 20_000L
@@ -130,18 +136,68 @@ fun StartScreen(
     val me by container.settings.session.collectAsStateWithLifecycle()
     val myName = me?.username
 
-    // Spływ, którego uczestników pokazujemy na mapie: ten, do którego przypisano nagrywaną trasę,
-    // a bez nagrywania – udostępniony spływ trwający teraz (od dnia przed startem do dwóch dni po starcie).
-    val contextTrip = pickContextTrip(state.trips, live?.tripId, System.currentTimeMillis())
+    // Spływ, którego uczestników pokazujemy na mapie i któremu wysyłamy swoją pozycję: ten, do którego
+    // przypisano nagrywaną trasę, potem wybrany ręcznie, a w ostateczności najbliższy terminem spływ
+    // z serwera. Tylko spływy udostępnione na serwerze mogą pokazywać innych uczestników.
+    var pickedTripId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var tripMenu by remember { mutableStateOf(false) }
+    val sharedTrips = state.trips.filter { it.serverId != null }
+    val nowMs = System.currentTimeMillis()
+    val contextTrip = pickContextTrip(state.trips, live?.tripId, pickedTripId, nowMs)
+    // Swoją pozycję udostępniamy i do spływu przypisujemy trasę tylko wtedy, gdy spływ trwa, został
+    // wybrany ręcznie albo już do niego nagrywamy – nie dla odległego terminem „najbliższego” spływu.
+    val sharingTrip = contextTrip?.takeIf {
+        it.id == live?.tripId || it.id == pickedTripId || isOngoing(it, nowMs)
+    }
+
+    // Po powrocie do aplikacji odświeżamy pozycje od razu, a w tle nie odpytujemy serwera.
+    var resumed by remember { mutableStateOf(true) }
+    LifecycleResumeEffect(Unit) {
+        resumed = true
+        onPauseOrDispose { resumed = false }
+    }
+
     var people by remember { mutableStateOf<List<PersonOnMap>>(emptyList()) }
+    var peopleError by remember { mutableStateOf<String?>(null) }
+    var peopleLoaded by remember { mutableStateOf(false) }
+    suspend fun refreshPeople(tripId: Long) {
+        val result = container.sync.fetchLocations(tripId)
+        peopleError = result.error
+        // Bez serwera (albo ze starym serwerem) pokazujemy chociaż wezwania pomocy znane z telefonu.
+        people = if (result.error == null) result.people else container.sync.localHelpPeople(tripId)
+        peopleLoaded = true
+    }
     LaunchedEffect(contextTrip?.id, myName) {
         people = emptyList()
+        peopleError = null
+        peopleLoaded = false
+    }
+    LaunchedEffect(contextTrip?.id, myName, resumed) {
         val tripId = contextTrip?.id ?: return@LaunchedEffect
+        if (!resumed) return@LaunchedEffect
         while (true) {
-            container.sync.fetchLocations(tripId)?.let { people = it }
+            refreshPeople(tripId)
             delay(PEOPLE_REFRESH_MS)
         }
     }
+
+    // Własną pozycję wysyła usługa nagrywania, gdy trasa jest przypisana do tego spływu. Poza
+    // nagrywaniem (i bez przypisania) wysyłamy ją stąd, dopóki aplikacja jest na ekranie.
+    val recordingHere = live?.tripId != null && live.tripId == contextTrip?.id
+    var shareError by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(sharingTrip?.id, myName, locationGranted, recordingHere, resumed) {
+        shareError = null
+        val tripId = sharingTrip?.id ?: return@LaunchedEffect
+        if (myName == null || !locationGranted || recordingHere || !resumed) return@LaunchedEffect
+        val helper = LocationHelper(context.applicationContext)
+        while (true) {
+            val point = helper.current()
+            shareError = if (point == null) "brak sygnału GPS – nie wysyłam pozycji."
+            else container.sync.pushLocation(tripId, point.lat, point.lon, point.fixAt)
+            delay(SHARE_REFRESH_MS)
+        }
+    }
+
     val others = people.filter { !it.name.equals(myName, ignoreCase = true) }
     val helpers = others.filter { it.needsHelp }
     val myAlert = people.firstOrNull { it.needsHelp && it.name.equals(myName, ignoreCase = true) }
@@ -160,7 +216,8 @@ fun StartScreen(
                 val text = if (outcome.ok) "Wezwano pomoc – uczestnicy spływu dostali powiadomienie."
                 else "Wezwanie zapisane na telefonie, ale nie wysłane: ${outcome.message}"
                 Toast.makeText(context, text, Toast.LENGTH_LONG).show()
-                container.sync.fetchLocations(trip.id)?.let { people = it }
+                container.sync.pushLocation(trip.id, point.lat, point.lon, point.fixAt)
+                refreshPeople(trip.id)
             }
         }
     }
@@ -301,7 +358,45 @@ fun StartScreen(
                 focus = focusPoint,
                 focusKey = focusKey
             )
-            GpsStatusChip(gpsStatus, Modifier.align(Alignment.TopStart).padding(12.dp))
+            Row(
+                modifier = Modifier.align(Alignment.TopStart).padding(start = 12.dp, top = 12.dp, end = 48.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                GpsStatusChip(gpsStatus)
+                Box(Modifier.weight(1f, fill = false)) {
+                    PeopleChip(
+                        text = when {
+                            myName == null -> "Zaloguj się, by widzieć innych"
+                            contextTrip == null -> "Brak spływu na serwerze"
+                            else -> contextTrip.title + " ▾" +
+                                if (peopleLoaded && peopleError == null) "  ${others.size} os." else ""
+                        },
+                        enabled = sharedTrips.isNotEmpty() && !recordingHere,
+                        onClick = { tripMenu = true }
+                    )
+                    DropdownMenu(expanded = tripMenu, onDismissRequest = { tripMenu = false }) {
+                        sharedTrips.forEach { trip ->
+                            DropdownMenuItem(
+                                text = { Text(trip.title) },
+                                onClick = {
+                                    pickedTripId = trip.id
+                                    tripMenu = false
+                                }
+                            )
+                        }
+                        if (pickedTripId != null) {
+                            DropdownMenuItem(
+                                text = { Text("Wybierz automatycznie") },
+                                onClick = {
+                                    pickedTripId = null
+                                    tripMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
             if (locationGranted) {
                 SmallFloatingActionButton(
                     onClick = { recenter++ },
@@ -314,6 +409,12 @@ fun StartScreen(
                 modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+            val problem = peopleError ?: shareError
+            if (contextTrip != null && myName != null && problem != null) {
+                InfoBanner("Uczestnicy: $problem")
+            } else if (contextTrip != null && myName != null && peopleLoaded && others.isEmpty()) {
+                InfoBanner("Nikt inny w spływie „${contextTrip.title}” nie udostępnia teraz pozycji.")
+            }
             helpers.forEach { person ->
                 HelpBanner(
                     text = "${person.name} wzywa pomocy!",
@@ -334,7 +435,7 @@ fun StartScreen(
                             if (!outcome.ok && outcome.message.isNotEmpty()) {
                                 Toast.makeText(context, outcome.message, Toast.LENGTH_LONG).show()
                             }
-                            container.sync.fetchLocations(contextTrip.id)?.let { people = it }
+                            refreshPeople(contextTrip.id)
                         }
                     }
                 )
@@ -413,6 +514,7 @@ fun StartScreen(
     if (showStart) {
         StartTrackDialog(
             trips = state.trips,
+            defaultTrip = sharingTrip,
             onDismiss = { showStart = false },
             onStart = { title, trip ->
                 showStart = false
@@ -522,12 +624,53 @@ private fun LiveStats(
 }
 
 /** Wybiera spływ, którego uczestników pokazujemy na mapie (patrz komentarz przy użyciu). */
-private fun pickContextTrip(trips: List<TripEntity>, liveTripId: Long?, now: Long): TripEntity? {
-    liveTripId?.let { id -> trips.firstOrNull { it.id == id && it.serverId != null }?.let { return it } }
+private fun pickContextTrip(trips: List<TripEntity>, liveTripId: Long?, pickedTripId: Long?, now: Long): TripEntity? {
+    val shared = trips.filter { it.serverId != null }
+    liveTripId?.let { id -> shared.firstOrNull { it.id == id }?.let { return it } }
+    pickedTripId?.let { id -> shared.firstOrNull { it.id == id }?.let { return it } }
+    // Data spływu to północ UTC, a spływ może trwać kilka dni – okno jest szerokie z obu stron.
+    val ongoing = shared.filter { isOngoing(it, now) }
+    return (ongoing.ifEmpty { shared }).minByOrNull { abs(it.startDateUtcMillis - now) }
+}
+
+private fun isOngoing(trip: TripEntity, now: Long): Boolean {
     val day = 24L * 60 * 60 * 1000
-    return trips
-        .filter { it.serverId != null && it.startDateUtcMillis - day <= now && now <= it.startDateUtcMillis + 2 * day }
-        .minByOrNull { abs(it.startDateUtcMillis - now) }
+    return trip.serverId != null && trip.startDateUtcMillis - day <= now && now <= trip.startDateUtcMillis + 4 * day
+}
+
+@Composable
+private fun PeopleChip(text: String, enabled: Boolean, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier.clip(CircleShape).clickable(enabled = enabled, onClick = onClick),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 3.dp
+    ) {
+        Text(
+            text,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun InfoBanner(text: String) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 4.dp
+    ) {
+        Text(
+            text,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
 }
 
 private enum class GpsStatus { OFF, SEARCHING, OK }
@@ -667,11 +810,13 @@ private fun InterruptedCard(track: TrackEntity, onResume: () -> Unit, onFinish: 
 @Composable
 private fun StartTrackDialog(
     trips: List<TripEntity>,
+    defaultTrip: TripEntity?,
     onDismiss: () -> Unit,
     onStart: (title: String, trip: TripEntity?) -> Unit
 ) {
-    var title by remember { mutableStateOf("") }
-    var trip by remember { mutableStateOf<TripEntity?>(null) }
+    // Domyślnie trasa należy do spływu z mapy – dzięki temu inni uczestnicy widzą Twoją pozycję.
+    var title by remember { mutableStateOf(defaultTrip?.title ?: "") }
+    var trip by remember { mutableStateOf(defaultTrip) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Rozpocznij trasę") },
@@ -698,7 +843,9 @@ private fun StartTrackDialog(
                 }
                 Text(
                     "Aplikacja zapisuje Twoją pozycję GPS także przy wygaszonym ekranie – w pasku powiadomień " +
-                        "pojawi się informacja. Dane zostają na tym telefonie.",
+                        "pojawi się informacja. " +
+                        if (trip?.serverId != null) "Uczestnicy tego spływu będą widzieć Twoją pozycję na mapie."
+                        else "Trasa zostaje na tym telefonie (bez spływu z serwera nikt nie widzi Twojej pozycji).",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

@@ -54,6 +54,9 @@ data class PersonOnMap(
     val updatedAt: Long
 )
 
+/** Wynik pobrania pozycji: lista albo opis problemu ([error] != null). */
+data class LocationsResult(val people: List<PersonOnMap> = emptyList(), val error: String? = null)
+
 data class RemoteTripInfo(
     val id: Long,
     val title: String,
@@ -794,39 +797,72 @@ class SyncRepository(
         }
     }
 
-    /** Wysyła własną pozycję do uczestników spływu (best effort – błędy są pomijane). */
-    suspend fun pushLocation(localTripId: Long, lat: Double, lon: Double, fixAt: Long) {
-        if (!enabled || !loggedIn) return
-        try {
-            val serverTripId = tripDao.getTrip(localTripId)?.serverId ?: return
-            api().putLocation(serverTripId, LocationRequest(lat, lon, Instant.ofEpochMilli(fixAt).toString()))
+    /** Wysyła własną pozycję uczestnikom spływu. Zwraca null, gdy się udało, albo opis problemu. */
+    suspend fun pushLocation(localTripId: Long, lat: Double, lon: Double, fixAt: Long): String? {
+        if (!enabled) return "Serwer jest wyłączony w ustawieniach."
+        if (!loggedIn) return "Zaloguj się, aby udostępniać pozycję."
+        return try {
+            val serverTripId = tripDao.getTrip(localTripId)?.serverId
+                ?: return "Ten spływ nie jest jeszcze na serwerze."
+            val response = api().putLocation(serverTripId, LocationRequest(lat, lon, Instant.ofEpochMilli(fixAt).toString()))
+            if (response.isSuccessful) null else locationProblem(response.code())
         } catch (e: CancellationException) {
             throw e
+        } catch (e: IOException) {
+            "Brak połączenia z serwerem."
         } catch (e: Exception) {
-            // Pozycja na żywo jest chwilowa – następną wyślemy za kilka sekund.
+            "Nie udało się wysłać pozycji (${e.javaClass.simpleName})."
         }
     }
 
-    /** Pobiera pozycje uczestników spływu; null, gdy się nie udało albo spływ nie jest udostępniony. */
-    suspend fun fetchLocations(localTripId: Long): List<PersonOnMap>? {
-        if (!enabled || !loggedIn) return null
+    /** Pozycje uczestników spływu albo opis problemu (np. serwer bez obsługi pozycji, brak sieci). */
+    suspend fun fetchLocations(localTripId: Long): LocationsResult {
+        if (!enabled) return LocationsResult(error = "Serwer jest wyłączony w ustawieniach.")
+        if (!loggedIn) return LocationsResult(error = "Zaloguj się, aby widzieć innych uczestników.")
         return try {
-            val serverTripId = tripDao.getTrip(localTripId)?.serverId ?: return null
-            api().locations(serverTripId).map {
-                PersonOnMap(
-                    name = it.username,
-                    lat = it.lat,
-                    lon = it.lon,
-                    needsHelp = it.needsHelp,
-                    helpCheckInId = it.helpCheckInId,
-                    updatedAt = parseTime(it.updatedAt, System.currentTimeMillis())
-                )
-            }
+            val serverTripId = tripDao.getTrip(localTripId)?.serverId
+                ?: return LocationsResult(error = "Ten spływ nie jest jeszcze na serwerze.")
+            LocationsResult(
+                people = api().locations(serverTripId).map {
+                    PersonOnMap(
+                        name = it.username,
+                        lat = it.lat,
+                        lon = it.lon,
+                        needsHelp = it.needsHelp,
+                        helpCheckInId = it.helpCheckInId,
+                        updatedAt = parseTime(it.updatedAt, System.currentTimeMillis())
+                    )
+                }
+            )
         } catch (e: CancellationException) {
             throw e
+        } catch (e: HttpException) {
+            LocationsResult(error = locationProblem(e.code()))
+        } catch (e: IOException) {
+            LocationsResult(error = "Brak połączenia z serwerem.")
         } catch (e: Exception) {
-            null
+            LocationsResult(error = "Nie udało się odczytać pozycji (${e.javaClass.simpleName}).")
         }
+    }
+
+    /**
+     * Osoby, które według zameldowań zapisanych na telefonie wzywają pomocy (najnowsze zameldowanie
+     * każdej osoby). Działa bez sieci i bez obsługi pozycji na serwerze.
+     */
+    suspend fun localHelpPeople(localTripId: Long): List<PersonOnMap> =
+        tripDao.checkInsOf(localTripId)
+            .groupBy { it.personName.lowercase() }
+            .mapNotNull { (_, list) -> list.maxByOrNull { it.createdAt }?.takeIf { it.needsHelp } }
+            .filter { System.currentTimeMillis() - it.createdAt <= LOCAL_HELP_MAX_AGE_MS }
+            .map {
+                PersonOnMap(it.personName, it.lat, it.lon, true, it.serverId ?: 0L, it.createdAt)
+            }
+
+    private fun locationProblem(code: Int): String = when (code) {
+        401 -> "Sesja wygasła – zaloguj się ponownie."
+        403 -> "Nie jesteś uczestnikiem tego spływu na serwerze."
+        404 -> "Serwer nie zna tego spływu albo nie obsługuje pozycji na żywo – zaktualizuj serwer."
+        else -> "Błąd serwera (HTTP $code)."
     }
 
     /**
@@ -853,6 +889,13 @@ class SyncRepository(
 
     /** Odwołuje własne wezwanie pomocy rozpoznane po id zameldowania na serwerze (z listy pozycji). */
     suspend fun cancelHelpByServerId(localTripId: Long, serverCheckInId: Long): SyncOutcome {
+        if (serverCheckInId <= 0) {
+            // Wezwanie jeszcze nie dotarło na serwer – odwołujemy własne zameldowanie z telefonu.
+            val mine = tripDao.checkInsOf(localTripId)
+                .filter { it.needsHelp && it.serverId == null && it.personName.equals(username, ignoreCase = true) }
+            if (mine.isEmpty()) return SyncOutcome(false, "Nie znaleziono wezwania do odwołania.")
+            return mine.map { cancelHelp(it.id) }.firstOrNull { !it.ok } ?: SyncOutcome(true, "")
+        }
         if (!enabled) return notEnabled
         return mutex.withLock {
             guarded {
@@ -934,6 +977,7 @@ class SyncRepository(
         enumValues<T>().firstOrNull { it.name == name } ?: default
 
     private companion object {
+        const val LOCAL_HELP_MAX_AGE_MS = 24L * 60 * 60 * 1000
         const val REMOVED_MESSAGE =
             "Ten spływ został usunięty lub nie jesteś już jego uczestnikiem – usunięto go z telefonu."
         val ERROR_FIELD = Regex("\"error\"\\s*:\\s*\"([^\"]*)\"")
