@@ -339,10 +339,10 @@ fun StartScreen(
             if (locationGranted) {
                 SmallFloatingActionButton(
                     onClick = { recenter++ },
-                    modifier = Modifier.align(Alignment.TopEnd).padding(top = 48.dp, end = 12.dp),
+                    modifier = Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 12.dp).size(52.dp),
                     containerColor = MaterialTheme.colorScheme.surface,
                     contentColor = MaterialTheme.colorScheme.primary
-                ) { Icon(Icons.Default.Place, contentDescription = "Pokaż moją pozycję") }
+                ) { Icon(Icons.Default.Place, contentDescription = "Pokaż moją pozycję", modifier = Modifier.size(28.dp)) }
             }
             Column(
                 modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(12.dp),
