@@ -21,7 +21,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TrackEntity::class,
         TrackPointEntity::class
     ],
-    version = 7,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -121,16 +121,9 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        /** Dodaje opcjonalną godzinę startu spływu. */
-        val MIGRATION_6_7 = object : Migration(6, 7) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE `trips` ADD COLUMN `startTime` TEXT NOT NULL DEFAULT ''")
-            }
-        }
-
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "kajakapp.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .build()
     }
 }

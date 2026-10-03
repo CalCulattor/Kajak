@@ -23,7 +23,6 @@ const (
 	maxCarSeats    = 99
 )
 
-var timeRe = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 var dateRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
 type Server struct {
@@ -387,7 +386,6 @@ type createTripRequest struct {
 	Title      string  `json:"title"`
 	SectionKey *string `json:"section_key"`
 	StartDate  string  `json:"start_date"`
-	StartTime  string  `json:"start_time"`
 	Overnight  bool    `json:"overnight"`
 	Notes      string  `json:"notes"`
 }
@@ -443,10 +441,6 @@ func (srv *Server) createTrip(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "start_date musi mieć format RRRR-MM-DD")
 		return
 	}
-	if req.StartTime != "" && !timeRe.MatchString(req.StartTime) {
-		writeError(w, http.StatusBadRequest, "start_time musi mieć format GG:MM")
-		return
-	}
 	day, err := time.Parse("2006-01-02", req.StartDate)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "start_date nie jest poprawną datą")
@@ -466,7 +460,6 @@ func (srv *Server) createTrip(w http.ResponseWriter, r *http.Request) {
 		Title:      req.Title,
 		SectionKey: req.SectionKey,
 		StartDate:  req.StartDate,
-		StartTime:  req.StartTime,
 		Overnight:  req.Overnight,
 		Organizer:  user,
 		Notes:      req.Notes,

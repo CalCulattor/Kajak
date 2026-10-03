@@ -138,7 +138,7 @@ fun TripDetailScreen(tripId: Long, onBack: () -> Unit) {
             else -> Column(Modifier.fillMaxSize().padding(padding)) {
                 TripSummary(
                     shared = trip.serverId != null,
-                    date = Fmt.utcDate(trip.startDateUtcMillis) + Fmt.timeSuffix(trip.startTime),
+                    date = Fmt.utcDate(trip.startDateUtcMillis),
                     overnight = trip.overnight,
                     sectionLabel = state.sectionLabel,
                     participants = state.participants

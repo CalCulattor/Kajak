@@ -15,10 +15,7 @@ import android.os.Looper
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,11 +31,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -64,15 +64,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -143,12 +139,15 @@ fun StartScreen(
     // Spływ, którego uczestników pokazujemy na mapie i któremu wysyłamy swoją pozycję: ten, do którego
     // przypisano nagrywaną trasę, potem wybrany ręcznie, a w ostateczności najbliższy terminem spływ
     // z serwera. Tylko spływy udostępnione na serwerze mogą pokazywać innych uczestników.
+    var pickedTripId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var tripMenu by remember { mutableStateOf(false) }
+    val sharedTrips = state.trips.filter { it.serverId != null }
     val nowMs = System.currentTimeMillis()
-    val contextTrip = pickContextTrip(state.trips, live?.tripId, nowMs)
+    val contextTrip = pickContextTrip(state.trips, live?.tripId, pickedTripId, nowMs)
     // Swoją pozycję udostępniamy i do spływu przypisujemy trasę tylko wtedy, gdy spływ trwa, został
     // wybrany ręcznie albo już do niego nagrywamy – nie dla odległego terminem „najbliższego” spływu.
     val sharingTrip = contextTrip?.takeIf {
-        it.id == live?.tripId || isOngoing(it, nowMs)
+        it.id == live?.tripId || it.id == pickedTripId || isOngoing(it, nowMs)
     }
 
     // Po powrocie do aplikacji odświeżamy pozycje od razu, a w tle nie odpytujemy serwera.
@@ -332,10 +331,14 @@ fun StartScreen(
         contentWindowInsets = NoInsets,
         topBar = {
             AppTopBar(
-                title = { Text("Eddy", fontWeight = FontWeight.Bold) },
+                title = { Text("KajakApp", fontWeight = FontWeight.Bold) },
                 actions = {
                     IconButton(onClick = { confirmHelp = true }) {
-                        LifebuoyIcon(Modifier.size(26.dp))
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = "Wezwij pomoc",
+                            tint = MaterialTheme.colorScheme.error
+                        )
                     }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Konto i ustawienia")
@@ -355,7 +358,45 @@ fun StartScreen(
                 focus = focusPoint,
                 focusKey = focusKey
             )
-            GpsStatusChip(gpsStatus, Modifier.align(Alignment.TopStart).padding(12.dp))
+            Row(
+                modifier = Modifier.align(Alignment.TopStart).padding(start = 12.dp, top = 12.dp, end = 48.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                GpsStatusChip(gpsStatus)
+                Box(Modifier.weight(1f, fill = false)) {
+                    PeopleChip(
+                        text = when {
+                            myName == null -> "Zaloguj się, by widzieć innych"
+                            contextTrip == null -> "Brak spływu na serwerze"
+                            else -> contextTrip.title + " ▾" +
+                                if (peopleLoaded && peopleError == null) "  ${others.size} os." else ""
+                        },
+                        enabled = sharedTrips.isNotEmpty() && !recordingHere,
+                        onClick = { tripMenu = true }
+                    )
+                    DropdownMenu(expanded = tripMenu, onDismissRequest = { tripMenu = false }) {
+                        sharedTrips.forEach { trip ->
+                            DropdownMenuItem(
+                                text = { Text(trip.title) },
+                                onClick = {
+                                    pickedTripId = trip.id
+                                    tripMenu = false
+                                }
+                            )
+                        }
+                        if (pickedTripId != null) {
+                            DropdownMenuItem(
+                                text = { Text("Wybierz automatycznie") },
+                                onClick = {
+                                    pickedTripId = null
+                                    tripMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
             if (locationGranted) {
                 SmallFloatingActionButton(
                     onClick = { recenter++ },
@@ -399,26 +440,8 @@ fun StartScreen(
                     }
                 )
             }
-            // Panel trasy w toku można przesunąć palcem: w dół chowa statystyki, w górę pokazuje je.
-            val dragThresholdPx = with(LocalDensity.current) { 28.dp.toPx() }
-            val dragModifier = if (live != null) {
-                Modifier.pointerInput(dragThresholdPx) {
-                    var total = 0f
-                    detectVerticalDragGestures(
-                        onDragStart = { total = 0f },
-                        onDragCancel = { total = 0f },
-                        onDragEnd = {
-                            if (total > dragThresholdPx) statsVisible = false
-                            else if (total < -dragThresholdPx) statsVisible = true
-                        },
-                        onVerticalDrag = { _, dy -> total += dy }
-                    )
-                }
-            } else {
-                Modifier
-            }
             Surface(
-                modifier = Modifier.fillMaxWidth().then(dragModifier),
+                modifier = Modifier.fillMaxWidth(),
                 shape = MaterialTheme.shapes.extraLarge,
                 color = MaterialTheme.colorScheme.surface,
                 shadowElevation = 6.dp
@@ -553,25 +576,17 @@ private fun LiveStats(
         else -> null
     }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        // Uchwyt: przeciągnij panel w dół/górę (albo stuknij), by schować lub pokazać statystyki.
-        Box(
-            Modifier.fillMaxWidth().clickable(onClick = onToggleStats).padding(vertical = 4.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Box(
-                Modifier.size(width = 40.dp, height = 5.dp).clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.outlineVariant)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (live.paused) "${live.title}\twstrzymano" else live.title,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
             )
+            TextButton(onClick = onToggleStats) { Text(if (statsVisible) "Ukryj statystyki" else "Pokaż statystyki") }
         }
-        Text(
-            if (live.paused) "${live.title}\twstrzymano" else live.title,
-            modifier = Modifier.fillMaxWidth(),
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1
-        )
-        AnimatedVisibility(visible = statsVisible) {
-          Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (statsVisible) {
             Text(Fmt.duration(live.activeElapsedMs(now)), style = MaterialTheme.typography.displaySmall)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 StatTile("Dystans", Fmt.distance(live.distanceM), Modifier.weight(1f))
@@ -582,7 +597,6 @@ private fun LiveStats(
                 StatTile("Czas w ruchu", Fmt.duration(live.movingMs), Modifier.weight(1f))
                 StatTile("Maks. prędkość", Fmt.speed(live.maxSpeedKmh), Modifier.weight(1f))
             }
-          }
         }
         if (warning != null) {
             Text(warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
@@ -610,9 +624,10 @@ private fun LiveStats(
 }
 
 /** Wybiera spływ, którego uczestników pokazujemy na mapie (patrz komentarz przy użyciu). */
-private fun pickContextTrip(trips: List<TripEntity>, liveTripId: Long?, now: Long): TripEntity? {
+private fun pickContextTrip(trips: List<TripEntity>, liveTripId: Long?, pickedTripId: Long?, now: Long): TripEntity? {
     val shared = trips.filter { it.serverId != null }
     liveTripId?.let { id -> shared.firstOrNull { it.id == id }?.let { return it } }
+    pickedTripId?.let { id -> shared.firstOrNull { it.id == id }?.let { return it } }
     // Data spływu to północ UTC, a spływ może trwać kilka dni – okno jest szerokie z obu stron.
     val ongoing = shared.filter { isOngoing(it, now) }
     return (ongoing.ifEmpty { shared }).minByOrNull { abs(it.startDateUtcMillis - now) }
@@ -621,6 +636,24 @@ private fun pickContextTrip(trips: List<TripEntity>, liveTripId: Long?, now: Lon
 private fun isOngoing(trip: TripEntity, now: Long): Boolean {
     val day = 24L * 60 * 60 * 1000
     return trip.serverId != null && trip.startDateUtcMillis - day <= now && now <= trip.startDateUtcMillis + 4 * day
+}
+
+@Composable
+private fun PeopleChip(text: String, enabled: Boolean, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier.clip(CircleShape).clickable(enabled = enabled, onClick = onClick),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 3.dp
+    ) {
+        Text(
+            text,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
 }
 
 @Composable
@@ -821,25 +854,4 @@ private fun StartTrackDialog(
         confirmButton = { TextButton(onClick = { onStart(title, trip) }) { Text("Start") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Anuluj") } }
     )
-}
-
-
-/** Ikona koła ratunkowego (wezwanie pomocy): czerwono-biały pierścień. */
-@Composable
-private fun LifebuoyIcon(modifier: Modifier = Modifier) {
-    val red = Color(0xFFD32F2F)
-    Canvas(modifier) {
-        val ring = size.minDimension * 0.26f
-        val diameter = size.minDimension - ring
-        val topLeft = Offset((size.width - diameter) / 2f, (size.height - diameter) / 2f)
-        val box = Size(diameter, diameter)
-        drawArc(red, 0f, 360f, false, topLeft, box, style = Stroke(ring))
-        // Cztery białe pasy na przekątnych.
-        for (start in listOf(25f, 115f, 205f, 295f)) {
-            drawArc(Color.White, start, 40f, false, topLeft, box, style = Stroke(ring))
-        }
-        val edge = size.minDimension * 0.05f
-        drawCircle(red, radius = size.minDimension / 2f - edge / 2f, style = Stroke(edge))
-        drawCircle(red, radius = size.minDimension / 2f - ring - edge / 2f, style = Stroke(edge))
-    }
 }

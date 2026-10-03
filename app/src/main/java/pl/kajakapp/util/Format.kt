@@ -7,9 +7,6 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 object Fmt {
-    /** Dopisek z godziną startu spływu (z tabulatorem jako separatorem) albo pusty tekst. */
-    fun timeSuffix(startTime: String): String = if (startTime.isBlank()) "" else "\tgodz. $startTime"
-
     private val dateTimePattern = DateTimeFormatter.ofPattern("dd.MM HH:mm")
     private val datePattern = DateTimeFormatter.ofPattern("dd.MM.yyyy")
 
