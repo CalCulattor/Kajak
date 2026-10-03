@@ -64,6 +64,7 @@ Wszystkie odpowiedzi to JSON. Błędy mają postać `{"error": "..."}`.
 | `POST /api/trips/{id}/participants`, `DELETE .../participants/{pid}` | Uczestnicy. `POST` dodaje **zawsze zalogowanego użytkownika** (`car_seats`, `needs_kayak`; opcjonalne `name` musi być zgodne z kontem, inaczej 403); ponowne wywołanie aktualizuje jego dane. `DELETE` pozwala usunąć tylko siebie; jedyny organizator nie może wyjść (musi mianować następcę albo usunąć spływ). |
 | `POST /api/trips/{id}/gear`, `PATCH`, `DELETE .../gear/{gid}` | Wyposażenie (tylko uczestnicy; `assigned_to` musi być uczestnikiem spływu). `PATCH` przyjmuje `packed` i/lub `assigned_to` (`null` czyści przypisanie). |
 | `GET /api/trips/{id}/checkins`, `POST` | Zameldowania (tylko uczestnicy; można zameldować tylko siebie): `lat`, `lon`, opcjonalnie `fix_at`, `needs_help`, `client_id` (`person_name` opcjonalne, musi zgadzać się z kontem). Lista jest od najnowszego. |
+| `PATCH /api/trips/{id}/checkins/{cid}` | Odwołanie (lub ponowienie) wezwania pomocy: `{"needs_help": false}`. Tylko autor zameldowania – inni, także organizator, dostają 403. |
 
 Wymagają logowania (nagłówek `Authorization: Bearer <token>`): wszystkie zapisy (trasy, przeszkody, głosy),
 lista i szczegóły spływów. Publiczne są tylko `GET` tras i przeszkód oraz `health`. Hasła są

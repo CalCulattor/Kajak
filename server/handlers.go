@@ -77,6 +77,7 @@ func (srv *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/trips/{id}/checkins", srv.listCheckIns)
 	mux.HandleFunc("POST /api/trips/{id}/checkins", srv.createCheckIn)
+	mux.HandleFunc("PATCH /api/trips/{id}/checkins/{cid}", srv.patchCheckIn)
 
 	return logRequests(mux)
 }
@@ -826,4 +827,40 @@ func (srv *Server) createCheckIn(w http.ResponseWriter, r *http.Request) {
 		srv.tripChanged(tripID)
 	}
 	writeJSON(w, status, c)
+}
+
+type patchCheckInRequest struct {
+	NeedsHelp *bool `json:"needs_help"`
+}
+
+// patchCheckIn pozwala autorowi zameldowania odwołać (lub ponowić) wezwanie pomocy.
+// Cudzego wezwania nie może zmienić nikt – także organizator.
+func (srv *Server) patchCheckIn(w http.ResponseWriter, r *http.Request) {
+	tripID, ok := pathID(w, r, "id")
+	if !ok {
+		return
+	}
+	cid, ok := pathID(w, r, "cid")
+	if !ok {
+		return
+	}
+	user, ok := srv.requireMember(w, r, tripID)
+	if !ok {
+		return
+	}
+	var req patchCheckInRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.NeedsHelp == nil {
+		writeError(w, http.StatusBadRequest, "needs_help jest wymagane")
+		return
+	}
+	c, err := srv.store.SetCheckInHelp(tripID, cid, user, *req.NeedsHelp)
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	srv.tripChanged(tripID)
+	writeJSON(w, http.StatusOK, c)
 }

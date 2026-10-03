@@ -21,6 +21,7 @@ import pl.kajakapp.data.db.RiverEntity
 import pl.kajakapp.data.db.SectionEntity
 import pl.kajakapp.data.db.TripEntity
 import pl.kajakapp.data.remote.AuthRequest
+import pl.kajakapp.data.remote.CheckInHelpRequest
 import pl.kajakapp.data.remote.CheckInRequest
 import pl.kajakapp.data.remote.GearPatchRequest
 import pl.kajakapp.data.remote.GearRequest
@@ -671,7 +672,12 @@ class SyncRepository(
             // Zameldowania (tylko dopisujemy; lokalnie niczego nie usuwamy)
             val localCheckIns = tripDao.checkInsOf(tripId)
             for (r in detail.checkIns) {
-                if (localCheckIns.any { it.serverId == r.id }) continue
+                val existing = localCheckIns.firstOrNull { it.serverId == r.id }
+                if (existing != null) {
+                    // Wezwanie pomocy mógł odwołać jego autor na innym telefonie.
+                    if (existing.needsHelp != r.needsHelp) tripDao.setCheckInHelp(existing.id, r.needsHelp)
+                    continue
+                }
                 val fix = parseTime(r.fixAt, System.currentTimeMillis())
                 tripDao.insertCheckIn(
                     CheckInEntity(
@@ -772,6 +778,28 @@ class SyncRepository(
                         .any { it.serverId != null && it.name.equals(name, ignoreCase = true) }
                 }
                 api().patchGear(serverTripId, serverGearId, GearPatchRequest(assignee, gear.packed))
+                SyncOutcome(true, "")
+            }
+        }
+    }
+
+    /**
+     * Odwołuje wezwanie pomocy. W spływie na serwerze najpierw odwołuje je serwer (tylko autor może to
+     * zrobić) i dopiero potem telefon; w spływie lokalnym wystarczy zmiana na telefonie.
+     */
+    suspend fun cancelHelp(checkInId: Long): SyncOutcome {
+        val checkIn = tripDao.getCheckIn(checkInId) ?: return SyncOutcome(true, "")
+        val serverId = checkIn.serverId
+        val serverTripId = tripDao.getTrip(checkIn.tripId)?.serverId
+        if (serverId == null || serverTripId == null) {
+            tripDao.setCheckInHelp(checkInId, false)
+            return SyncOutcome(true, "")
+        }
+        if (!enabled) return notEnabled
+        return mutex.withLock {
+            guarded {
+                api().patchCheckIn(serverTripId, serverId, CheckInHelpRequest(false))
+                tripDao.setCheckInHelp(checkInId, false)
                 SyncOutcome(true, "")
             }
         }

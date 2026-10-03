@@ -281,6 +281,8 @@ func TestTripFlow(t *testing.T) {
 		t.Fatalf("checkin: %d %s", code, body)
 	}
 
+	var ci CheckIn
+	// (id zameldowania pobieramy ze szczegółów poniżej)
 	var detail TripDetail
 	_, body = call(t, "GET", tripURL, nil)
 	decodeInto(t, body, &detail)
@@ -290,6 +292,23 @@ func TestTripFlow(t *testing.T) {
 	}
 	if !detail.CheckIns[0].NeedsHelp || detail.CheckIns[0].FixAt.Hour() != 9 {
 		t.Fatalf("zameldowanie: %+v", detail.CheckIns[0])
+	}
+
+	// Wezwanie pomocy odwołać może tylko jego autor.
+	ciURL := tripURL + "/checkins/" + itoa(detail.CheckIns[0].ID)
+	if code, _ = call(t, "PATCH", ciURL, map[string]any{"needs_help": false}); code != 403 {
+		t.Errorf("cudze wezwanie: oczekiwano 403, jest %d", code)
+	}
+	if code, _ = callAs(t, olaToken, "PATCH", ciURL, map[string]any{}); code != 400 {
+		t.Errorf("brak needs_help: oczekiwano 400, jest %d", code)
+	}
+	code, body = callAs(t, olaToken, "PATCH", ciURL, map[string]any{"needs_help": false})
+	decodeInto(t, body, &ci)
+	if code != 200 || ci.NeedsHelp {
+		t.Fatalf("odwołanie pomocy: %d %+v", code, ci)
+	}
+	if code, _ = callAs(t, olaToken, "PATCH", tripURL+"/checkins/99999", map[string]any{"needs_help": false}); code != 404 {
+		t.Errorf("nieistniejące zameldowanie: oczekiwano 404, jest %d", code)
 	}
 
 	// Usunięcie spływu usuwa wszystko, co do niego należało.

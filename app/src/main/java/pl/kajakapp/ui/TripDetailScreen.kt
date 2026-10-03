@@ -179,7 +179,8 @@ fun TripDetailScreen(tripId: Long, onBack: () -> Unit) {
                         lockedName = if (trip.serverId != null) state.currentUser else null,
                         participants = state.participants,
                         checkIns = state.checkIns,
-                        onCheckIn = vm::checkIn
+                        onCheckIn = vm::checkIn,
+                        onCancelHelp = vm::cancelHelp
                     )
                 }
             }
@@ -486,7 +487,8 @@ private fun CheckInsTab(
     lockedName: String?,
     participants: List<ParticipantEntity>,
     checkIns: List<CheckInEntity>,
-    onCheckIn: (name: String, point: pl.kajakapp.util.GeoPoint, needsHelp: Boolean) -> Unit
+    onCheckIn: (name: String, point: pl.kajakapp.util.GeoPoint, needsHelp: Boolean) -> Unit,
+    onCancelHelp: (checkInId: Long) -> Unit
 ) {
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
@@ -562,8 +564,14 @@ private fun CheckInsTab(
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
-                        TextButton(onClick = { openInMaps(context, c.lat, c.lon, c.personName) }) {
-                            Text("Pokaż na mapie")
+                        Row {
+                            TextButton(onClick = { openInMaps(context, c.lat, c.lon, c.personName) }) {
+                                Text("Pokaż na mapie")
+                            }
+                            // Wezwanie odwołać może tylko osoba, która je wysłała.
+                            if (c.needsHelp && c.personName.equals(lockedName ?: defaultName, ignoreCase = true)) {
+                                TextButton(onClick = { onCancelHelp(c.id) }) { Text("Odwołaj wezwanie") }
+                            }
                         }
                     }
                 }
