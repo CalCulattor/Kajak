@@ -40,10 +40,11 @@ import kotlinx.coroutines.launch
 import pl.kajakapp.data.ServerSettings
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(onBack: () -> Unit, onOpenAuth: () -> Unit) {
     val container = rememberContainer()
     val settings = container.settings
     val saved by settings.url.collectAsStateWithLifecycle()
+    val session by settings.session.collectAsStateWithLifecycle()
     var text by rememberSaveable { mutableStateOf(saved) }
     var status by remember { mutableStateOf<String?>(null) }
     var statusIsError by remember { mutableStateOf(false) }
@@ -83,6 +84,25 @@ fun SettingsScreen(onBack: () -> Unit) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            Text("Konto", style = MaterialTheme.typography.titleMedium)
+            val account = session
+            if (account != null) {
+                Text("Zalogowano jako ${account.username}.")
+                OutlinedButton(onClick = {
+                    scope.launch {
+                        val result = container.sync.logout()
+                        status = result.message
+                        statusIsError = false
+                    }
+                }) { Text("Wyloguj") }
+            } else {
+                Text(
+                    "Nie jesteś zalogowany. Bez konta możesz korzystać z aplikacji lokalnie i czytać " +
+                        "trasy oraz przeszkody; wysyłanie danych i spływy na serwerze wymagają konta."
+                )
+                OutlinedButton(onClick = onOpenAuth) { Text("Zaloguj / zarejestruj") }
+            }
+            Text("Serwer", style = MaterialTheme.typography.titleMedium)
             Text(
                 "Adres serwera KajakApp. Przez niego aplikacja wymienia trasy, przeszkody, " +
                     "spływy i zameldowania z innymi użytkownikami. Puste pole wyłącza synchronizację " +
@@ -129,10 +149,10 @@ fun SettingsScreen(onBack: () -> Unit) {
                 )
             }
             Text(
-                "Uwaga: serwer nie ma logowania. Wszystko, co wyślesz (trasy, przeszkody, spływy, " +
-                    "imiona uczestników i pozycje GPS z zameldowań), widzi każdy, kto zna adres serwera.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error
+                "Uwaga: trasy i przeszkody są publiczne. Spływy (uczestnicy, wyposażenie, pozycje GPS " +
+                    "z zameldowań) widzą tylko ich uczestnicy, ale administrator serwera ma dostęp do " +
+                    "wszystkich danych. Zmiana adresu serwera wylogowuje.",
+                style = MaterialTheme.typography.bodySmall
             )
         }
     }

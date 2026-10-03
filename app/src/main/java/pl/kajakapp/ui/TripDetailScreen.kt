@@ -72,7 +72,7 @@ fun TripDetailScreen(tripId: Long, onBack: () -> Unit) {
     val container = rememberContainer()
     val vm: TripDetailViewModel = viewModel(
         key = "trip_$tripId",
-        factory = VmFactory { TripDetailViewModel(tripId, container.trips, container.rivers, container.sync) }
+        factory = VmFactory { TripDetailViewModel(tripId, container.trips, container.rivers, container.sync, container.settings) }
     )
     val state by vm.state.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -113,7 +113,14 @@ fun TripDetailScreen(tripId: Long, onBack: () -> Unit) {
                                 )
                             }
                             IconButton(onClick = { confirmDelete = true }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Usuń spływ")
+                                Icon(
+                                    Icons.Default.Delete,
+                                    contentDescription = if (state.trip?.serverId != null && !state.isOwner) {
+                                        "Opuść spływ"
+                                    } else {
+                                        "Usuń spływ"
+                                    }
+                                )
                             }
                         }
                     }
@@ -146,12 +153,20 @@ fun TripDetailScreen(tripId: Long, onBack: () -> Unit) {
                 when (tab) {
                     0 -> ParticipantsTab(
                         participants = state.participants,
+                        shared = trip.serverId != null,
+                        currentUser = state.currentUser,
                         onAdd = vm::addParticipant,
+                        onUpdateMine = vm::updateMyData,
                         onRemove = vm::removeParticipant
                     )
                     1 -> GearTab(
                         gear = state.gear,
-                        participants = state.participants,
+                        // W spływie na serwerze przypisać można tylko uczestników z kontami.
+                        participants = if (trip.serverId != null) {
+                            state.participants.filter { it.serverId != null }
+                        } else {
+                            state.participants
+                        },
                         onAdd = vm::addGear,
                         onAddSuggested = vm::addSuggestedGear,
                         onPacked = vm::setGearPacked,
@@ -159,7 +174,8 @@ fun TripDetailScreen(tripId: Long, onBack: () -> Unit) {
                         onRemove = vm::removeGear
                     )
                     else -> CheckInsTab(
-                        defaultName = trip.organizer,
+                        defaultName = state.currentUser ?: trip.organizer,
+                        lockedName = if (trip.serverId != null) state.currentUser else null,
                         participants = state.participants,
                         checkIns = state.checkIns,
                         onCheckIn = vm::checkIn
@@ -170,17 +186,42 @@ fun TripDetailScreen(tripId: Long, onBack: () -> Unit) {
     }
 
     if (confirmDelete) {
+        val sharedTrip = state.trip?.serverId != null
+        val leaving = sharedTrip && !state.isOwner
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
-            title = { Text("Usunąć spływ?") },
-            text = { Text("Zostaną usunięci uczestnicy, lista wyposażenia i zameldowania tego spływu.") },
+            title = { Text(if (leaving) "Opuścić spływ?" else "Usunąć spływ?") },
+            text = {
+                Text(
+                    when {
+                        leaving ->
+                            "Przestaniesz być uczestnikiem tego spływu, a on zniknie z Twojej listy. " +
+                                "Pozostali uczestnicy nadal go widzą. Wymaga połączenia z serwerem."
+                        sharedTrip ->
+                            "Jako organizator usuniesz spływ dla WSZYSTKICH uczestników (razem z listą " +
+                                "wyposażenia i zameldowaniami). Wymaga połączenia z serwerem."
+                        else ->
+                            "Zostaną usunięci uczestnicy, lista wyposażenia i zameldowania tego spływu."
+                    }
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     confirmDelete = false
                     vm.deleteTrip(onDeleted = onBack)
-                }) { Text("Usuń") }
+                }) { Text(if (leaving) "Opuść" else "Usuń") }
             },
-            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Anuluj") } }
+            dismissButton = {
+                Row {
+                    if (sharedTrip) {
+                        TextButton(onClick = {
+                            confirmDelete = false
+                            vm.deleteTripLocalOnly(onDeleted = onBack)
+                        }) { Text("Tylko z telefonu") }
+                    }
+                    TextButton(onClick = { confirmDelete = false }) { Text("Anuluj") }
+                }
+            }
         )
     }
 }
@@ -226,35 +267,60 @@ private fun TripSummary(
 @Composable
 private fun ParticipantsTab(
     participants: List<ParticipantEntity>,
+    shared: Boolean,
+    currentUser: String?,
     onAdd: (name: String, carSeats: Int, needsKayak: Boolean) -> Unit,
+    onUpdateMine: (carSeats: Int, needsKayak: Boolean) -> Unit,
     onRemove: (Long) -> Unit
 ) {
     var showDialog by remember { mutableStateOf(false) }
+    val me = participants.firstOrNull { it.name.equals(currentUser, ignoreCase = true) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        item { OutlinedButton(onClick = { showDialog = true }) { Text("Dodaj uczestnika") } }
+        item {
+            if (!shared) {
+                OutlinedButton(onClick = { showDialog = true }) { Text("Dodaj uczestnika") }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "W spływie na serwerze każdy dodaje tylko siebie – inne osoby dołączają " +
+                            "przez przycisk „Dołącz” na liście spływów.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (me != null) {
+                        OutlinedButton(onClick = { showDialog = true }) { Text("Moje dane (auto, kajak)") }
+                    }
+                }
+            }
+        }
         items(participants, key = { it.id }) { p ->
+            val isMe = shared && p.name.equals(currentUser, ignoreCase = true)
+            val localOnly = shared && p.serverId == null && !isMe
             Card(Modifier.fillMaxWidth()) {
                 Row(
                     Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text(p.name, fontWeight = FontWeight.Bold)
+                        Text(p.name + if (isMe) " (Ty)" else "", fontWeight = FontWeight.Bold)
                         val details = buildList {
                             if (p.carSeats > 0) add("auto: ${p.carSeats} miejsc")
                             if (p.needsKayak) add("potrzebuje kajaka")
+                            if (localOnly) add("tylko na tym telefonie")
                         }
                         if (details.isNotEmpty()) {
                             Text(details.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
                         }
                     }
-                    IconButton(onClick = { onRemove(p.id) }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Usuń uczestnika ${p.name}")
+                    // W spływie na serwerze usunąć można tylko wpis lokalny; siebie – przez „Opuść spływ”.
+                    if (!shared || localOnly) {
+                        IconButton(onClick = { onRemove(p.id) }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Usuń uczestnika ${p.name}")
+                        }
                     }
                 }
             }
@@ -263,19 +329,21 @@ private fun ParticipantsTab(
 
     if (showDialog) {
         var name by remember { mutableStateOf("") }
-        var seats by remember { mutableStateOf("") }
-        var needsKayak by remember { mutableStateOf(false) }
+        var seats by remember { mutableStateOf(me?.takeIf { shared }?.carSeats?.toString().orEmpty()) }
+        var needsKayak by remember { mutableStateOf(me?.takeIf { shared }?.needsKayak ?: false) }
         AlertDialog(
             onDismissRequest = { showDialog = false },
-            title = { Text("Nowy uczestnik") },
+            title = { Text(if (shared) "Moje dane" else "Nowy uczestnik") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { if (it.length <= 80) name = it },
-                        label = { Text("Imię") },
-                        singleLine = true
-                    )
+                    if (!shared) {
+                        OutlinedTextField(
+                            value = name,
+                            onValueChange = { if (it.length <= 80) name = it },
+                            label = { Text("Imię") },
+                            singleLine = true
+                        )
+                    }
                     OutlinedTextField(
                         value = seats,
                         onValueChange = { seats = it.filter(Char::isDigit).take(2) },
@@ -285,18 +353,22 @@ private fun ParticipantsTab(
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Switch(checked = needsKayak, onCheckedChange = { needsKayak = it })
-                        Text("  Potrzebuje kajaka")
+                        Text("  Potrzebuję kajaka")
                     }
                 }
             },
             confirmButton = {
                 TextButton(
-                    enabled = name.isNotBlank(),
+                    enabled = shared || name.isNotBlank(),
                     onClick = {
-                        onAdd(name, seats.toIntOrNull() ?: 0, needsKayak)
+                        if (shared) {
+                            onUpdateMine(seats.toIntOrNull() ?: 0, needsKayak)
+                        } else {
+                            onAdd(name, seats.toIntOrNull() ?: 0, needsKayak)
+                        }
                         showDialog = false
                     }
-                ) { Text("Dodaj") }
+                ) { Text(if (shared) "Zapisz" else "Dodaj") }
             },
             dismissButton = { TextButton(onClick = { showDialog = false }) { Text("Anuluj") } }
         )
@@ -384,6 +456,7 @@ private fun GearTab(
 @Composable
 private fun CheckInsTab(
     defaultName: String,
+    lockedName: String?,
     participants: List<ParticipantEntity>,
     checkIns: List<CheckInEntity>,
     onCheckIn: (name: String, point: pl.kajakapp.util.GeoPoint, needsHelp: Boolean) -> Unit
@@ -473,25 +546,30 @@ private fun CheckInsTab(
     }
 
     if (showDialog) {
-        var name by remember { mutableStateOf(defaultName) }
+        var name by remember { mutableStateOf(lockedName ?: defaultName) }
         var needsHelp by remember { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = { showDialog = false },
             title = { Text("Zameldowanie") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ChoiceButton(
-                        selectedLabel = "Wybierz osobę",
-                        options = participants.map { it.name },
-                        optionLabel = { it },
-                        onSelected = { name = it }
-                    )
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { if (it.length <= 80) name = it },
-                        label = { Text("Kto się melduje") },
-                        singleLine = true
-                    )
+                    if (lockedName != null) {
+                        // W spływie na serwerze można zameldować tylko siebie.
+                        Text("Melduje się: $lockedName", fontWeight = FontWeight.Medium)
+                    } else {
+                        ChoiceButton(
+                            selectedLabel = "Wybierz osobę",
+                            options = participants.map { it.name },
+                            optionLabel = { it },
+                            onSelected = { name = it }
+                        )
+                        OutlinedTextField(
+                            value = name,
+                            onValueChange = { if (it.length <= 80) name = it },
+                            label = { Text("Kto się melduje") },
+                            singleLine = true
+                        )
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Switch(checked = needsHelp, onCheckedChange = { needsHelp = it })
                         Text("  Potrzebuję pomocy")

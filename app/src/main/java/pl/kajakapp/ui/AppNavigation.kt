@@ -28,6 +28,7 @@ private object Routes {
     const val TRIP = "trip/{id}"
     const val ADD_ROUTE = "route/new"
     const val SETTINGS = "settings"
+    const val AUTH = "auth"
     const val ARG_ID = "id"
 
     fun section(id: Long) = "section/$id"
@@ -98,7 +99,13 @@ fun KajakAppRoot() {
                 )
             }
             composable(Routes.SETTINGS) {
-                SettingsScreen(onBack = { nav.popBackStack() })
+                SettingsScreen(
+                    onBack = { nav.popBackStack() },
+                    onOpenAuth = { nav.navigate(Routes.AUTH) }
+                )
+            }
+            composable(Routes.AUTH) {
+                AuthScreen(onBack = { nav.popBackStack() }, onDone = { nav.popBackStack() })
             }
             composable(
                 route = Routes.SECTION,

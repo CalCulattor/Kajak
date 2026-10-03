@@ -20,6 +20,7 @@ import pl.kajakapp.data.db.ParticipantEntity
 import pl.kajakapp.data.db.RiverEntity
 import pl.kajakapp.data.db.SectionEntity
 import pl.kajakapp.data.db.TripEntity
+import pl.kajakapp.data.remote.AuthRequest
 import pl.kajakapp.data.remote.CheckInRequest
 import pl.kajakapp.data.remote.GearPatchRequest
 import pl.kajakapp.data.remote.GearRequest
@@ -70,7 +71,16 @@ class SyncRepository(
 
     val enabled: Boolean get() = settings.url.value.isNotEmpty()
 
-    private fun api(): KajakServerApi = Network.server(settings.url.value)
+    private fun api(): KajakServerApi =
+        Network.server(settings.url.value) { settings.session.value?.token }
+
+    private val username: String? get() = settings.session.value?.username
+    private val loggedIn: Boolean get() = settings.session.value != null
+
+    private val notEnabled = SyncOutcome(false, "Adres serwera jest pusty – synchronizacja wyłączona.")
+
+    private fun needLogin(what: String) =
+        SyncOutcome(false, "Zaloguj się (ikona ustawień), aby $what.")
 
     private val disabled = SyncOutcome(true, "")
 
@@ -88,6 +98,57 @@ class SyncRepository(
         }
     }
 
+    // ------------------------------------------------------------ konto
+
+    /** Rejestruje nowe konto ([register] = true) albo loguje się na istniejące. */
+    suspend fun authenticate(name: String, password: String, register: Boolean): SyncOutcome {
+        if (!enabled) return notEnabled
+        return guarded {
+            try {
+                val body = AuthRequest(name.trim(), password)
+                val response = if (register) api().register(body) else api().login(body)
+                val previous = settings.lastAccount
+                val mirror = settings.mirrorUrl
+                val sameServer = mirror == null || mirror == settings.url.value
+                settings.setSession(response.username, response.token)
+                val sameAccount = previous == null || previous.equals(response.username, ignoreCase = true)
+                if (!sameAccount || !sameServer) {
+                    // Lokalne kopie spływów innego konta lub innego serwera nie pasują do tej sesji.
+                    tripDao.deleteSharedTrips()
+                }
+                SyncOutcome(
+                    true,
+                    if (register) {
+                        "Konto utworzone. Zalogowano jako ${response.username}."
+                    } else {
+                        "Zalogowano jako ${response.username}."
+                    }
+                )
+            } catch (e: HttpException) {
+                SyncOutcome(false, authMessage(e))
+            }
+        }
+    }
+
+    /** Wylogowuje (unieważnia sesję na serwerze, o ile się da) i zawsze czyści sesję lokalnie. */
+    suspend fun logout(): SyncOutcome {
+        if (enabled && loggedIn) {
+            guarded {
+                api().logout()
+                SyncOutcome(true, "")
+            }
+        }
+        settings.clearSession()
+        return SyncOutcome(true, "Wylogowano.")
+    }
+
+    private fun authMessage(e: HttpException): String = when (e.code()) {
+        401 -> "Niepoprawna nazwa użytkownika lub hasło."
+        409 -> "Ta nazwa użytkownika jest już zajęta."
+        429 -> "Zbyt wiele prób. Spróbuj ponownie za kilka minut."
+        else -> describeHttp(e)
+    }
+
     // ------------------------------------------------------------ trasy
 
     /** Wysyła trasy dodane w aplikacji, a potem pobiera trasy dodane przez innych. */
@@ -96,6 +157,7 @@ class SyncRepository(
         return mutex.withLock {
             guarded {
                 val api = api()
+                val hadPending = riverDao.pendingSections().isNotEmpty()
                 val pushed = pushPendingSections(api)
                 var added = 0
                 db.withTransaction {
@@ -129,17 +191,23 @@ class SyncRepository(
                         added++
                     }
                 }
-                SyncOutcome(true, "Trasy: wysłano $pushed, pobrano $added.")
+                if (hadPending && !loggedIn) {
+                    needLogin("wysłać dodane trasy na serwer")
+                } else {
+                    SyncOutcome(true, "Trasy: wysłano $pushed, pobrano $added.")
+                }
             }
         }
     }
 
     /** Wysyła lokalnie dodane odcinki; zwraca liczbę wysłanych. Wołać tylko pod [mutex]. */
     private suspend fun pushPendingSections(api: KajakServerApi): Int {
+        if (!loggedIn) return 0 // dodawanie tras wymaga konta
         var count = 0
         for (section in riverDao.pendingSections()) {
             val river = riverDao.getRiver(section.riverId) ?: continue
-            val dto = api.createRoute(
+            val dto = try {
+                api.createRoute(
                 RouteRequest(
                     clientId = settings.clientId("s", section.id),
                     riverName = river.name,
@@ -155,7 +223,11 @@ class SyncRepository(
                     stationName = section.stationName.orEmpty(),
                     description = section.description
                 )
-            )
+                )
+            } catch (e: HttpException) {
+                // Odrzucona trasa (400) nie może blokować pozostałych ani pobierania cudzych tras.
+                if (e.code() == 400) continue else throw e
+            }
             riverDao.markSectionSynced(section.id, dto.key)
             count++
         }
@@ -178,11 +250,22 @@ class SyncRepository(
                         ?: return@guarded SyncOutcome(false, "Nie znaleziono odcinka.")
                 }
                 val key = section.serverKey
-                    ?: return@guarded SyncOutcome(false, "Odcinek nie jest jeszcze na serwerze.")
+                    ?: return@guarded if (loggedIn) {
+                        SyncOutcome(false, "Odcinek nie jest jeszcze na serwerze.")
+                    } else {
+                        needLogin("wysłać tę trasę na serwer")
+                    }
 
-                pushObstacles(api, key, sectionId)
+                if (loggedIn) pushObstacles(api, key, sectionId)
                 pullObstacles(api, key, sectionId)
-                SyncOutcome(true, "")
+                val hasPending = obstacleDao.listForSection(sectionId).any {
+                    it.serverId == null || it.pendingConfirms > 0 || it.pendingRemovals > 0
+                }
+                if (hasPending && !loggedIn) {
+                    needLogin("wysłać swoje zgłoszenia i głosy")
+                } else {
+                    SyncOutcome(true, "")
+                }
             }
         }
     }
@@ -191,16 +274,21 @@ class SyncRepository(
         for (stored in obstacleDao.listForSection(sectionId)) {
             var cur = stored
             if (cur.serverId == null) {
-                val dto = api.createObstacle(
-                    sectionKey,
-                    ObstacleRequest(
-                        clientId = settings.clientId("o", cur.id),
-                        type = cur.type.name,
-                        description = cur.description,
-                        lat = cur.lat,
-                        lon = cur.lon
+                val dto = try {
+                    api.createObstacle(
+                        sectionKey,
+                        ObstacleRequest(
+                            clientId = settings.clientId("o", cur.id),
+                            type = cur.type.name,
+                            description = cur.description,
+                            lat = cur.lat,
+                            lon = cur.lon
+                        )
                     )
-                )
+                } catch (e: HttpException) {
+                    // Odrzucone zgłoszenie (400) zostaje lokalnie i nie blokuje pozostałych.
+                    if (e.code() == 400) continue else throw e
+                }
                 cur = cur.copy(serverId = dto.id)
                 obstacleDao.update(cur)
             }
@@ -273,11 +361,13 @@ class SyncRepository(
     // ------------------------------------------------------------ spływy
 
     /**
-     * Pierwsze wywołanie udostępnia spływ na serwerze (z uczestnikami, wyposażeniem i
-     * zameldowaniami), kolejne wysyłają nowe elementy i pobierają zmiany innych osób.
+     * Pierwsze wywołanie udostępnia spływ na serwerze (twórcą zostaje zalogowany użytkownik),
+     * kolejne wysyłają nowe elementy i pobierają zmiany innych osób. Jeśli spływ został usunięty
+     * albo użytkownik przestał w nim uczestniczyć, lokalna kopia jest usuwana.
      */
     suspend fun syncTrip(tripId: Long): SyncOutcome {
-        if (!enabled) return SyncOutcome(false, "Adres serwera jest pusty – synchronizacja wyłączona.")
+        if (!enabled) return notEnabled
+        val user = username ?: return needLogin("udostępnić spływ i synchronizować go z serwerem")
         return mutex.withLock {
             guarded {
                 val api = api()
@@ -292,22 +382,63 @@ class SyncRepository(
                             sectionKey = sectionKey,
                             startDate = toIsoDate(trip.startDateUtcMillis),
                             overnight = trip.overnight,
-                            organizer = trip.organizer,
                             notes = trip.notes
                         )
                     )
-                    trip = trip.copy(serverId = created.id)
+                    // Organizatora wpisanego ręcznie przed zalogowaniem zastępuje konto.
+                    tripDao.participantsOf(tripId)
+                        .firstOrNull { it.serverId == null && it.name.equals(trip.organizer, ignoreCase = true) }
+                        ?.let { tripDao.updateParticipant(it.copy(name = user)) }
+                    trip = trip.copy(serverId = created.id, organizer = user, ownerUsername = user)
                     tripDao.updateTrip(trip)
                 }
                 val serverTripId = trip.serverId
                     ?: return@guarded SyncOutcome(false, "Spływ nie ma identyfikatora na serwerze.")
 
-                pushTripChildren(api, tripId, serverTripId)
+                val remote = fetchTripOrNull(api, serverTripId)
+                if (remote == null) {
+                    tripDao.deleteTrip(tripId)
+                    return@guarded SyncOutcome(true, REMOVED_MESSAGE)
+                }
+                pushTripChildren(api, tripId, serverTripId, user, remote)
                 mergeTrip(tripId, api.trip(serverTripId))
                 SyncOutcome(true, "Spływ jest zsynchronizowany z serwerem.")
             }
         }
     }
+
+    /** Synchronizuje wszystkie spływy udostępnione na serwerze (wykrywa usunięcia i wyjścia). */
+    suspend fun syncSharedTrips(): SyncOutcome {
+        if (!enabled || !loggedIn) return SyncOutcome(true, "")
+        var removed = 0
+        var failure: SyncOutcome? = null
+        for (id in tripDao.sharedTripIds()) {
+            val result = syncTrip(id)
+            if (result.message == REMOVED_MESSAGE) {
+                removed++
+            } else if (!result.ok && failure == null) {
+                failure = result
+            }
+        }
+        return when {
+            removed > 0 -> SyncOutcome(true, "Usunięto z telefonu spływy, które już nie istnieją lub w których nie uczestniczysz: $removed.")
+            failure != null -> failure
+            else -> SyncOutcome(true, "")
+        }
+    }
+
+    /** Spływ z serwera albo null, gdy go nie ma (404) lub nie jesteśmy już jego uczestnikiem (403). */
+    private suspend fun fetchTripOrNull(api: KajakServerApi, serverTripId: Long): TripDetailDto? =
+        try {
+            api.trip(serverTripId)
+        } catch (e: HttpException) {
+            // Za „spływ zniknął” uznajemy tylko odpowiedź w formacie naszego serwera ({"error": ...}),
+            // żeby goły 404 z proxy albo innego serwera nie kasował lokalnych danych.
+            val fromOurServer = (e.code() == 404 || e.code() == 403) &&
+                runCatching { e.response()?.errorBody()?.string() }.getOrNull()
+                    ?.let { ERROR_FIELD.containsMatchIn(it) } == true
+            if (fromOurServer) null else throw e
+        }
 
     private suspend fun sectionKeyFor(api: KajakServerApi, sectionId: Long?): String? {
         if (sectionId == null) return null
@@ -319,40 +450,38 @@ class SyncRepository(
         return section.serverKey
     }
 
-    private suspend fun pushTripChildren(api: KajakServerApi, tripId: Long, serverTripId: Long) {
-        // Stan serwera przed wysyłką: pozwala dopasować istniejące elementy po nazwie zamiast
-        // dublować je (organizator jest tworzony przez serwer razem ze spływem).
-        val remote = api.trip(serverTripId)
-        val linkedParticipants = tripDao.participantsOf(tripId).mapNotNull { it.serverId }.toMutableSet()
-        val linkedGear = tripDao.gearOf(tripId).mapNotNull { it.serverId }.toMutableSet()
-
+    /**
+     * Wysyła lokalne elementy spływu. Na serwer trafiają tylko: użytkownik jako uczestnik
+     * (nikogo innego nie można dodać), jego zameldowania oraz wyposażenie. Pozostałe osoby
+     * wpisane lokalnie zostają tylko na tym telefonie.
+     */
+    private suspend fun pushTripChildren(
+        api: KajakServerApi,
+        tripId: Long,
+        serverTripId: Long,
+        user: String,
+        remote: TripDetailDto
+    ) {
         for (p in tripDao.participantsOf(tripId)) {
-            if (p.serverId != null) continue
-            val match = remote.participants.firstOrNull {
-                it.id !in linkedParticipants && it.name.equals(p.name, ignoreCase = true)
-            }
-            val remoteId = if (match != null) {
-                match.id
-            } else {
-                api.addParticipant(
-                    serverTripId,
-                    ParticipantRequest(p.name, p.carSeats, p.needsKayak)
-                ).id
-            }
-            linkedParticipants += remoteId
-            tripDao.updateParticipant(p.copy(serverId = remoteId))
+            if (p.serverId != null || !p.name.equals(user, ignoreCase = true)) continue
+            val dto = api.addParticipant(serverTripId, ParticipantRequest(p.carSeats, p.needsKayak))
+            tripDao.updateParticipant(p.copy(name = dto.name, serverId = dto.id))
         }
 
+        val knownNames = remote.participants.map { it.name }.toMutableList()
+        if (knownNames.none { it.equals(user, ignoreCase = true) }) knownNames += user
+        val linkedGear = tripDao.gearOf(tripId).mapNotNull { it.serverId }.toMutableSet()
         for (g in tripDao.gearOf(tripId)) {
             if (g.serverId != null) continue
+            val assignee = g.assignedTo?.let { name -> knownNames.firstOrNull { it.equals(name, ignoreCase = true) } }
             val match = remote.gear.firstOrNull {
                 it.id !in linkedGear && it.name.equals(g.name, ignoreCase = true)
             }
             val remoteId = if (match != null) {
                 match.id
             } else {
-                val created = api.addGear(serverTripId, GearRequest(g.name, g.assignedTo))
-                if (g.packed) api.patchGear(serverTripId, created.id, GearPatchRequest(g.assignedTo, true))
+                val created = api.addGear(serverTripId, GearRequest(g.name, assignee))
+                if (g.packed) api.patchGear(serverTripId, created.id, GearPatchRequest(assignee, true))
                 created.id
             }
             linkedGear += remoteId
@@ -360,12 +489,12 @@ class SyncRepository(
         }
 
         for (c in tripDao.checkInsOf(tripId)) {
-            if (c.serverId != null) continue
+            if (c.serverId != null || !c.personName.equals(user, ignoreCase = true)) continue
             val dto = api.addCheckIn(
                 serverTripId,
                 CheckInRequest(
                     clientId = settings.clientId("c", c.id),
-                    personName = c.personName,
+                    personName = user,
                     lat = c.lat,
                     lon = c.lon,
                     fixAt = Instant.ofEpochMilli(c.fixAt).toString(),
@@ -373,6 +502,55 @@ class SyncRepository(
                 )
             )
             tripDao.updateCheckIn(c.copy(serverId = dto.id, pendingSync = false))
+        }
+    }
+
+    /** Wysyła zmienione dane własnego uczestnika (miejsca w aucie, kajak) w udostępnionym spływie. */
+    suspend fun pushMyParticipant(tripId: Long): SyncOutcome {
+        if (!enabled) return SyncOutcome(true, "")
+        val user = username ?: return needLogin("wysłać swoje dane do spływu")
+        return mutex.withLock {
+            guarded {
+                val trip = tripDao.getTrip(tripId)
+                val serverTripId = trip?.serverId ?: return@guarded SyncOutcome(true, "")
+                val me = tripDao.participantsOf(tripId)
+                    .firstOrNull { it.name.equals(user, ignoreCase = true) }
+                    ?: return@guarded SyncOutcome(true, "")
+                val dto = api().addParticipant(serverTripId, ParticipantRequest(me.carSeats, me.needsKayak))
+                tripDao.updateParticipant(me.copy(serverId = dto.id))
+                SyncOutcome(true, "")
+            }
+        }
+    }
+
+    /**
+     * Usuwa spływ z serwera przed usunięciem go z telefonu: organizator kasuje spływ dla wszystkich,
+     * pozostali uczestnicy tylko opuszczają spływ (usuwają siebie). Spływ tylko lokalny nie wymaga serwera.
+     */
+    suspend fun removeTripFromServer(tripId: Long): SyncOutcome {
+        // Stan spływu czytamy pod blokadą, żeby nie zdublować się z trwającym udostępnianiem.
+        return mutex.withLock {
+            val trip = tripDao.getTrip(tripId) ?: return@withLock SyncOutcome(true, "")
+            val serverTripId = trip.serverId ?: return@withLock SyncOutcome(true, "")
+            if (!enabled) return@withLock notEnabled
+            val user = username
+                ?: return@withLock needLogin("usunąć lub opuścić udostępniony spływ")
+            guarded {
+                val api = api()
+                if ((trip.ownerUsername ?: trip.organizer).equals(user, ignoreCase = true)) {
+                    val response = api.deleteTrip(serverTripId)
+                    if (!response.isSuccessful && response.code() != 404) throw HttpException(response)
+                } else {
+                    val me = tripDao.participantsOf(tripId)
+                        .firstOrNull { it.serverId != null && it.name.equals(user, ignoreCase = true) }
+                    val myServerId = me?.serverId
+                    if (myServerId != null) {
+                        val response = api.deleteParticipant(serverTripId, myServerId)
+                        if (!response.isSuccessful && response.code() != 404) throw HttpException(response)
+                    }
+                }
+                SyncOutcome(true, "")
+            }
         }
     }
 
@@ -390,6 +568,7 @@ class SyncRepository(
                     startDateUtcMillis = fromIsoDate(detail.trip.startDate, trip.startDateUtcMillis),
                     overnight = detail.trip.overnight,
                     organizer = detail.trip.organizer.ifBlank { trip.organizer },
+                    ownerUsername = detail.trip.organizer.ifBlank { trip.ownerUsername },
                     notes = detail.trip.notes
                 )
             )
@@ -468,9 +647,8 @@ class SyncRepository(
 
     /** Lista spływów dostępnych na serwerze (do dołączenia). */
     suspend fun listRemoteTrips(): RemoteTripsResult {
-        if (!enabled) {
-            return RemoteTripsResult(SyncOutcome(false, "Adres serwera jest pusty – synchronizacja wyłączona."), emptyList())
-        }
+        if (!enabled) return RemoteTripsResult(notEnabled, emptyList())
+        if (!loggedIn) return RemoteTripsResult(needLogin("zobaczyć spływy na serwerze"), emptyList())
         var trips: List<RemoteTripInfo> = emptyList()
         val outcome = guarded {
             trips = api().trips().map {
@@ -487,11 +665,13 @@ class SyncRepository(
         return RemoteTripsResult(outcome, trips)
     }
 
-    /** Dodaje do lokalnej bazy spływ z serwera (jeśli go jeszcze nie ma) i zwraca jego lokalne id. */
+    /**
+     * Dołącza zalogowanego użytkownika do spływu z serwera (jako siebie) i dodaje spływ
+     * do lokalnej bazy. Zwraca lokalne id spływu.
+     */
     suspend fun joinTrip(remoteTripId: Long): JoinResult {
-        if (!enabled) {
-            return JoinResult(SyncOutcome(false, "Adres serwera jest pusty – synchronizacja wyłączona."), null)
-        }
+        if (!enabled) return JoinResult(notEnabled, null)
+        if (!loggedIn) return JoinResult(needLogin("dołączyć do spływu"), null)
         var localId: Long? = null
         val outcome = mutex.withLock {
             guarded {
@@ -499,7 +679,17 @@ class SyncRepository(
                     localId = it.id
                     return@guarded SyncOutcome(true, "Ten spływ już masz na liście.")
                 }
-                val detail = api().trip(remoteTripId)
+                val api = api()
+                // Gdy już jesteśmy uczestnikiem, nie nadpisujemy swoich danych ponownym dołączeniem.
+                val detail = try {
+                    fetchTripOrNull(api, remoteTripId) ?: run {
+                        api.addParticipant(remoteTripId, ParticipantRequest(carSeats = 0, needsKayak = false))
+                        api.trip(remoteTripId)
+                    }
+                } catch (e: HttpException) {
+                    if (e.code() == 404) return@guarded SyncOutcome(false, "Ten spływ już nie istnieje.")
+                    throw e
+                }
                 val sectionId = detail.trip.sectionKey?.let { riverDao.findSectionByKey(it)?.id }
                 val id = tripDao.insertTrip(
                     TripEntity(
@@ -509,7 +699,8 @@ class SyncRepository(
                         overnight = detail.trip.overnight,
                         organizer = detail.trip.organizer,
                         notes = detail.trip.notes,
-                        serverId = remoteTripId
+                        serverId = remoteTripId,
+                        ownerUsername = detail.trip.organizer
                     )
                 )
                 mergeTrip(id, detail)
@@ -530,7 +721,12 @@ class SyncRepository(
                 val gear = tripDao.getGear(gearId) ?: return@guarded disabled
                 val serverGearId = gear.serverId ?: return@guarded disabled
                 val serverTripId = tripDao.getTrip(gear.tripId)?.serverId ?: return@guarded disabled
-                api().patchGear(serverTripId, serverGearId, GearPatchRequest(gear.assignedTo, gear.packed))
+                // Serwer przyjmuje tylko uczestników z konta; osoba wpisana lokalnie nie może być przypisana.
+                val assignee = gear.assignedTo?.takeIf { name ->
+                    tripDao.participantsOf(gear.tripId)
+                        .any { it.serverId != null && it.name.equals(name, ignoreCase = true) }
+                }
+                api().patchGear(serverTripId, serverGearId, GearPatchRequest(assignee, gear.packed))
                 SyncOutcome(true, "")
             }
         }
@@ -561,6 +757,10 @@ class SyncRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: HttpException) {
+            if (e.code() == 401 && loggedIn) {
+                // Token wygasł albo został unieważniony – wymagane ponowne logowanie.
+                settings.clearSession()
+            }
             SyncOutcome(false, describeHttp(e))
         } catch (e: UnknownServiceException) {
             SyncOutcome(false, "Połączenie bez szyfrowania (http) jest zablokowane – użyj adresu https.")
@@ -579,6 +779,8 @@ class SyncRepository(
         val detail = runCatching { e.response()?.errorBody()?.string() }.getOrNull()
             ?.let { ERROR_FIELD.find(it)?.groupValues?.get(1) }
         return when (e.code()) {
+            401 -> "Sesja wygasła lub nie jesteś zalogowany – zaloguj się ponownie."
+            403 -> "Serwer odmówił: " + (detail ?: "brak uprawnień do tej operacji.")
             404 -> "Serwer nie obsługuje tej funkcji lub nie ma takiego zasobu (może wymaga aktualizacji serwera)."
             400, 413 -> "Serwer odrzucił dane" + (detail?.let { ": $it" } ?: ".")
             else -> "Błąd serwera (HTTP ${e.code()})."
@@ -600,6 +802,8 @@ class SyncRepository(
         enumValues<T>().firstOrNull { it.name == name } ?: default
 
     private companion object {
+        const val REMOVED_MESSAGE =
+            "Ten spływ został usunięty lub nie jesteś już jego uczestnikiem – usunięto go z telefonu."
         val ERROR_FIELD = Regex("\"error\"\\s*:\\s*\"([^\"]*)\"")
     }
 }

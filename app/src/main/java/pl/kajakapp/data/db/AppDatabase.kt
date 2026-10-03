@@ -19,7 +19,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         GearItemEntity::class,
         CheckInEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -53,9 +53,22 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** Dodaje właściciela spływu (konto organizatora). */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE trips ADD COLUMN ownerUsername TEXT")
+                // Spływy udostępnione przed wprowadzeniem kont nie mają właściciela-konta;
+                // stają się spływami lokalnymi i można je udostępnić ponownie po zalogowaniu.
+                db.execSQL("UPDATE trips SET serverId = NULL")
+                db.execSQL("UPDATE participants SET serverId = NULL")
+                db.execSQL("UPDATE gear_items SET serverId = NULL")
+                db.execSQL("UPDATE check_ins SET serverId = NULL, pendingSync = 1")
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "kajakapp.db")
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
     }
 }

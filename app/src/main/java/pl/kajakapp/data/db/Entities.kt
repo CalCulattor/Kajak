@@ -148,7 +148,9 @@ data class TripEntity(
     val organizer: String,
     val notes: String,
     /** Identyfikator spływu na serwerze (null = spływ tylko lokalny). */
-    val serverId: Long? = null
+    val serverId: Long? = null,
+    /** Nazwa konta organizatora (twórcy) spływu; null = spływ utworzony bez logowania. */
+    val ownerUsername: String? = null
 )
 
 @Entity(
