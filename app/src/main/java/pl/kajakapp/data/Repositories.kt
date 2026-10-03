@@ -11,7 +11,9 @@ import pl.kajakapp.data.db.RiverEntity
 import pl.kajakapp.data.db.SectionEntity
 import pl.kajakapp.data.db.SectionWithRiver
 import pl.kajakapp.data.db.TripEntity
+import pl.kajakapp.domain.Difficulty
 import pl.kajakapp.domain.ObstacleType
+import pl.kajakapp.domain.RiverType
 
 class RiverRepository(private val db: AppDatabase) {
     private val dao = db.riverDao()
@@ -24,6 +26,45 @@ class RiverRepository(private val db: AppDatabase) {
 
     suspend fun setStation(sectionId: Long, stationName: String?) {
         dao.updateStation(sectionId, stationName?.trim()?.takeIf { it.isNotEmpty() })
+    }
+
+    /**
+     * Zapisuje nową trasę (odcinek) lokalnie i oznacza ją do wysłania na serwer.
+     * Rzeka o takiej samej nazwie i regionie jest używana ponownie.
+     */
+    suspend fun addRoute(
+        riverName: String,
+        region: String,
+        riverType: RiverType,
+        sectionName: String,
+        lengthKm: Double,
+        difficulty: Difficulty,
+        putIn: String,
+        takeOut: String,
+        lat: Double,
+        lon: Double,
+        stationName: String,
+        description: String
+    ): Long = db.withTransaction {
+        val name = riverName.trim()
+        val area = region.trim()
+        val riverId = dao.findRiver(name, area)?.id
+            ?: dao.insertRiver(RiverEntity(name = name, region = area, type = riverType, description = ""))
+        dao.insertSection(
+            SectionEntity(
+                riverId = riverId,
+                name = sectionName.trim(),
+                lengthKm = lengthKm,
+                difficulty = difficulty,
+                putIn = putIn.trim(),
+                takeOut = takeOut.trim(),
+                lat = lat,
+                lon = lon,
+                stationName = stationName.trim().takeIf { it.isNotEmpty() },
+                description = description.trim(),
+                pendingSync = true
+            )
+        )
     }
 
     fun observeObstacles(sectionId: Long): Flow<List<ObstacleEntity>> =

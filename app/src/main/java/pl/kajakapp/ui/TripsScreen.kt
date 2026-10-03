@@ -10,11 +10,13 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -23,6 +25,8 @@ import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -48,18 +52,30 @@ import pl.kajakapp.data.db.SectionWithRiver
 import pl.kajakapp.util.Fmt
 
 @Composable
-fun TripsScreen(onOpenTrip: (Long) -> Unit) {
+fun TripsScreen(onOpenTrip: (Long) -> Unit, onOpenSettings: () -> Unit) {
     val container = rememberContainer()
     val vm: TripsViewModel = viewModel(
-        factory = VmFactory { TripsViewModel(container.trips, container.rivers) }
+        factory = VmFactory { TripsViewModel(container.trips, container.rivers, container.sync) }
     )
     val items by vm.items.collectAsStateWithLifecycle()
     val sections by vm.sections.collectAsStateWithLifecycle()
+    val join by vm.join.collectAsStateWithLifecycle()
     var showCreate by remember { mutableStateOf(false) }
 
     Scaffold(
         contentWindowInsets = NoInsets,
-        topBar = { TopAppBar(title = { Text("Spływy") }, windowInsets = NoInsets) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Spływy") },
+                windowInsets = NoInsets,
+                actions = {
+                    TextButton(onClick = vm::openJoin) { Text("Dołącz") }
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Default.Settings, contentDescription = "Ustawienia serwera")
+                    }
+                }
+            )
+        },
         floatingActionButton = {
             FloatingActionButton(onClick = { showCreate = true }) {
                 Icon(Icons.Default.Add, contentDescription = "Nowy spływ")
@@ -104,6 +120,14 @@ fun TripsScreen(onOpenTrip: (Long) -> Unit) {
         }
     }
 
+    join?.let { state ->
+        JoinTripDialog(
+            state = state,
+            onJoin = { id -> vm.joinTrip(id, onJoined = onOpenTrip) },
+            onDismiss = vm::closeJoin
+        )
+    }
+
     if (showCreate) {
         CreateTripDialog(
             sections = sections,
@@ -114,6 +138,52 @@ fun TripsScreen(onOpenTrip: (Long) -> Unit) {
             }
         )
     }
+}
+
+@Composable
+private fun JoinTripDialog(
+    state: JoinUiState,
+    onJoin: (Long) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Spływy na serwerze") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+                state.message?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                if (!state.loading && state.message == null && state.trips.isEmpty()) {
+                    Text("Na serwerze nie ma jeszcze żadnych spływów.")
+                }
+                LazyColumn(Modifier.heightIn(max = 360.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(state.trips, key = { it.id }) { trip ->
+                        Card(Modifier.fillMaxWidth()) {
+                            Row(
+                                Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(trip.title, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        "${trip.startDate} · ${trip.organizer}",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                                TextButton(onClick = { onJoin(trip.id) }, enabled = !state.loading) {
+                                    Text(if (trip.alreadyJoined) "Otwórz" else "Dołącz")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Zamknij") } }
+    )
 }
 
 @Composable
@@ -140,13 +210,13 @@ private fun CreateTripDialog(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = title,
-                    onValueChange = { title = it },
+                    onValueChange = { if (it.length <= 120) title = it },
                     label = { Text("Nazwa spływu") },
                     singleLine = true
                 )
                 OutlinedTextField(
                     value = organizer,
-                    onValueChange = { organizer = it },
+                    onValueChange = { if (it.length <= 80) organizer = it },
                     label = { Text("Twoje imię (organizator)") },
                     singleLine = true
                 )

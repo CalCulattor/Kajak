@@ -3,6 +3,8 @@ package pl.kajakapp.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -13,7 +15,9 @@ import kotlinx.coroutines.launch
 import pl.kajakapp.data.ConditionsRepository
 import pl.kajakapp.data.FetchStatus
 import pl.kajakapp.data.RefreshResult
+import pl.kajakapp.data.RemoteTripInfo
 import pl.kajakapp.data.RiverRepository
+import pl.kajakapp.data.SyncRepository
 import pl.kajakapp.data.TripRepository
 import pl.kajakapp.data.db.CheckInEntity
 import pl.kajakapp.data.db.GearItemEntity
@@ -24,10 +28,12 @@ import pl.kajakapp.data.db.SectionEntity
 import pl.kajakapp.data.db.SectionWithRiver
 import pl.kajakapp.data.db.TripEntity
 import pl.kajakapp.domain.DataFreshness
+import pl.kajakapp.domain.Difficulty
 import pl.kajakapp.domain.ObstacleRules
 import pl.kajakapp.domain.ObstacleType
 import pl.kajakapp.domain.RiskAssessment
 import pl.kajakapp.domain.RiskAssessor
+import pl.kajakapp.domain.RiverType
 import pl.kajakapp.domain.WaterReading
 import pl.kajakapp.domain.WeatherSnapshot
 import pl.kajakapp.util.GeoPoint
@@ -43,7 +49,10 @@ private const val STOP_TIMEOUT_MS = 5_000L
 
 data class RiverItem(val river: RiverEntity, val sections: List<SectionEntity>)
 
-class RiversViewModel(rivers: RiverRepository) : ViewModel() {
+class RiversViewModel(
+    private val rivers: RiverRepository,
+    private val sync: SyncRepository
+) : ViewModel() {
     /** null = jeszcze się ładuje. */
     val items: StateFlow<List<RiverItem>?> =
         combine(rivers.observeRivers(), rivers.observeAllSections()) { riverList, sections ->
@@ -54,6 +63,64 @@ class RiversViewModel(rivers: RiverRepository) : ViewModel() {
                 )
             }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), null)
+
+    private val _syncing = MutableStateFlow(false)
+    val syncing: StateFlow<Boolean> = _syncing
+
+    private val _message = MutableStateFlow<String?>(null)
+    val message: StateFlow<String?> = _message
+
+    /**
+     * Wysyła trasy dodane lokalnie i pobiera trasy innych osób. Przy automatycznym wywołaniu
+     * komunikat o błędzie pojawia się tylko wtedy, gdy coś czeka na wysłanie.
+     */
+    fun refresh(manual: Boolean) {
+        if (_syncing.value) return
+        viewModelScope.launch {
+            _syncing.value = true
+            try {
+                val result = sync.syncRoutes()
+                val hasPending = items.value.orEmpty().any { item -> item.sections.any { it.pendingSync } }
+                if (result.message.isNotEmpty() && (manual || (!result.ok && hasPending))) {
+                    _message.value = result.message
+                }
+            } finally {
+                _syncing.value = false
+            }
+        }
+    }
+
+    fun consumeMessage() {
+        _message.value = null
+    }
+}
+
+// ---------------------------------------------------------------- Nowa trasa
+
+class AddRouteViewModel(private val rivers: RiverRepository) : ViewModel() {
+    fun save(
+        riverName: String,
+        region: String,
+        riverType: RiverType,
+        sectionName: String,
+        lengthKm: Double,
+        difficulty: Difficulty,
+        putIn: String,
+        takeOut: String,
+        lat: Double,
+        lon: Double,
+        stationName: String,
+        description: String,
+        onSaved: (Long) -> Unit
+    ) {
+        viewModelScope.launch {
+            val id = rivers.addRoute(
+                riverName, region, riverType, sectionName, lengthKm, difficulty,
+                putIn, takeOut, lat, lon, stationName, description
+            )
+            onSaved(id)
+        }
+    }
 }
 
 // ---------------------------------------------------------------- Odcinek
@@ -76,7 +143,8 @@ data class SectionUiState(
 class SectionViewModel(
     private val sectionId: Long,
     private val rivers: RiverRepository,
-    private val conditions: ConditionsRepository
+    private val conditions: ConditionsRepository,
+    private val sync: SyncRepository
 ) : ViewModel() {
 
     private val refreshing = MutableStateFlow(false)
@@ -127,12 +195,34 @@ class SectionViewModel(
         viewModelScope.launch {
             refreshing.value = true
             try {
-                val current = rivers.observeSection(sectionId).first()
-                if (current != null) {
-                    message.value = describe(conditions.refresh(current.section, current.riverName))
+                coroutineScope {
+                    val conditionsText = async {
+                        val current = rivers.observeSection(sectionId).first()
+                        if (current == null) {
+                            null
+                        } else {
+                            describe(conditions.refresh(current.section, current.riverName))
+                        }
+                    }
+                    val syncResult = async { sync.syncObstacles(sectionId) }
+                    val parts = listOfNotNull(
+                        conditionsText.await(),
+                        syncResult.await().takeIf { !it.ok && it.message.isNotEmpty() }?.message
+                    )
+                    message.value = parts.takeIf { it.isNotEmpty() }?.joinToString(" ")
                 }
             } finally {
                 refreshing.value = false
+            }
+        }
+    }
+
+    /** Wysyła świeże zgłoszenia/głosy; przy błędzie dane zostają lokalnie i pójdą przy następnej próbie. */
+    private fun pushObstacleChanges() {
+        viewModelScope.launch {
+            val result = sync.syncObstacles(sectionId)
+            if (!result.ok && result.message.isNotEmpty()) {
+                message.value = "Zapisano na telefonie. ${result.message}"
             }
         }
     }
@@ -147,15 +237,22 @@ class SectionViewModel(
     fun reportObstacle(type: ObstacleType, description: String, point: GeoPoint?) {
         viewModelScope.launch {
             rivers.reportObstacle(sectionId, type, description, point?.lat, point?.lon)
+            pushObstacleChanges()
         }
     }
 
     fun confirmObstacle(id: Long) {
-        viewModelScope.launch { rivers.confirmObstacle(id) }
+        viewModelScope.launch {
+            rivers.confirmObstacle(id)
+            pushObstacleChanges()
+        }
     }
 
     fun voteObstacleRemoved(id: Long) {
-        viewModelScope.launch { rivers.voteObstacleRemoved(id) }
+        viewModelScope.launch {
+            rivers.voteObstacleRemoved(id)
+            pushObstacleChanges()
+        }
     }
 
     fun showMessage(text: String) {
@@ -187,10 +284,52 @@ class SectionViewModel(
 
 data class TripItem(val trip: TripEntity, val sectionLabel: String?)
 
+/** Stan okna „Dołącz do spływu z serwera”. */
+data class JoinUiState(
+    val loading: Boolean = true,
+    val trips: List<RemoteTripInfo> = emptyList(),
+    val message: String? = null
+)
+
 class TripsViewModel(
     private val trips: TripRepository,
-    rivers: RiverRepository
+    rivers: RiverRepository,
+    private val sync: SyncRepository
 ) : ViewModel() {
+
+    /** null = okno zamknięte. */
+    private val _join = MutableStateFlow<JoinUiState?>(null)
+    val join: StateFlow<JoinUiState?> = _join
+
+    fun openJoin() {
+        _join.value = JoinUiState(loading = true)
+        viewModelScope.launch {
+            val result = sync.listRemoteTrips()
+            _join.value = JoinUiState(
+                loading = false,
+                trips = result.trips,
+                message = result.outcome.message.takeIf { !result.outcome.ok && it.isNotEmpty() }
+            )
+        }
+    }
+
+    fun closeJoin() {
+        _join.value = null
+    }
+
+    fun joinTrip(remoteId: Long, onJoined: (Long) -> Unit) {
+        _join.value = _join.value?.copy(loading = true, message = null)
+        viewModelScope.launch {
+            val result = sync.joinTrip(remoteId)
+            val localId = result.tripId
+            if (localId != null) {
+                _join.value = null
+                onJoined(localId)
+            } else {
+                _join.value = _join.value?.copy(loading = false, message = result.outcome.message)
+            }
+        }
+    }
 
     val sections: StateFlow<List<SectionWithRiver>> =
         rivers.observeAllSections()
@@ -224,16 +363,22 @@ data class TripDetailState(
     val sectionLabel: String? = null,
     val participants: List<ParticipantEntity> = emptyList(),
     val gear: List<GearItemEntity> = emptyList(),
-    val checkIns: List<CheckInEntity> = emptyList()
+    val checkIns: List<CheckInEntity> = emptyList(),
+    val syncing: Boolean = false,
+    val message: String? = null
 )
 
 class TripDetailViewModel(
     private val tripId: Long,
     private val trips: TripRepository,
-    rivers: RiverRepository
+    rivers: RiverRepository,
+    private val sync: SyncRepository
 ) : ViewModel() {
 
-    val state: StateFlow<TripDetailState> = combine(
+    private val syncing = MutableStateFlow(false)
+    private val message = MutableStateFlow<String?>(null)
+
+    private val data = combine(
         trips.observeTrip(tripId),
         trips.observeParticipants(tripId),
         trips.observeGear(tripId),
@@ -251,18 +396,67 @@ class TripDetailViewModel(
             gear = gear,
             checkIns = checkIns
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), TripDetailState())
+    }
+
+    val state: StateFlow<TripDetailState> =
+        combine(data, syncing, message) { d, isSyncing, msg ->
+            d.copy(syncing = isSyncing, message = msg)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), TripDetailState())
+
+    private val isShared: Boolean get() = state.value.trip?.serverId != null
+
+    /** Ręczna synchronizacja; pierwsze wywołanie udostępnia spływ na serwerze. */
+    fun syncNow() {
+        if (syncing.value) return
+        viewModelScope.launch {
+            syncing.value = true
+            try {
+                val result = sync.syncTrip(tripId)
+                message.value = result.message.ifEmpty { null }
+            } finally {
+                syncing.value = false
+            }
+        }
+    }
+
+    /** Po zmianie lokalnej wysyła ją od razu, jeśli spływ jest udostępniony. */
+    private fun syncIfShared() {
+        if (!isShared) return
+        viewModelScope.launch {
+            val result = sync.syncTrip(tripId)
+            if (!result.ok && result.message.isNotEmpty()) {
+                message.value = "Zapisano na telefonie. ${result.message}"
+            }
+        }
+    }
+
+    fun consumeMessage() {
+        message.value = null
+    }
 
     fun addParticipant(name: String, carSeats: Int, needsKayak: Boolean) {
-        viewModelScope.launch { trips.addParticipant(tripId, name, carSeats, needsKayak) }
+        viewModelScope.launch {
+            trips.addParticipant(tripId, name, carSeats, needsKayak)
+            syncIfShared()
+        }
     }
 
     fun removeParticipant(id: Long) {
-        viewModelScope.launch { trips.removeParticipant(id) }
+        val current = state.value
+        val remoteParticipantId = current.participants.firstOrNull { it.id == id }?.serverId
+        val remoteTripId = current.trip?.serverId
+        viewModelScope.launch {
+            trips.removeParticipant(id)
+            val result = sync.deleteRemote(remoteTripId, remoteParticipantId, null)
+            if (!result.ok && result.message.isNotEmpty()) message.value = result.message
+        }
     }
 
     fun addGear(name: String) {
-        viewModelScope.launch { trips.addGear(tripId, name) }
+        viewModelScope.launch {
+            trips.addGear(tripId, name)
+            syncIfShared()
+        }
     }
 
     fun addSuggestedGear() {
@@ -270,24 +464,44 @@ class TripDetailViewModel(
         val trip = current.trip ?: return
         viewModelScope.launch {
             trips.addSuggestedGear(tripId, trip.overnight, current.gear.map { it.name }.toSet())
+            syncIfShared()
         }
     }
 
     fun setGearPacked(id: Long, packed: Boolean) {
-        viewModelScope.launch { trips.setGearPacked(id, packed) }
+        viewModelScope.launch {
+            trips.setGearPacked(id, packed)
+            pushGear(id)
+        }
     }
 
     fun assignGear(id: Long, assignee: String?) {
-        viewModelScope.launch { trips.assignGear(id, assignee) }
+        viewModelScope.launch {
+            trips.assignGear(id, assignee)
+            pushGear(id)
+        }
+    }
+
+    private suspend fun pushGear(id: Long) {
+        val result = sync.pushGear(id)
+        if (!result.ok && result.message.isNotEmpty()) message.value = result.message
     }
 
     fun removeGear(id: Long) {
-        viewModelScope.launch { trips.removeGear(id) }
+        val current = state.value
+        val remoteGearId = current.gear.firstOrNull { it.id == id }?.serverId
+        val remoteTripId = current.trip?.serverId
+        viewModelScope.launch {
+            trips.removeGear(id)
+            val result = sync.deleteRemote(remoteTripId, null, remoteGearId)
+            if (!result.ok && result.message.isNotEmpty()) message.value = result.message
+        }
     }
 
     fun checkIn(personName: String, point: GeoPoint, needsHelp: Boolean) {
         viewModelScope.launch {
             trips.checkIn(tripId, personName, point.lat, point.lon, point.fixAt, needsHelp)
+            syncIfShared()
         }
     }
 

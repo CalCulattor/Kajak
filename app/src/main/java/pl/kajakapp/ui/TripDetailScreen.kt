@@ -16,6 +16,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -38,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -70,31 +72,54 @@ fun TripDetailScreen(tripId: Long, onBack: () -> Unit) {
     val container = rememberContainer()
     val vm: TripDetailViewModel = viewModel(
         key = "trip_$tripId",
-        factory = VmFactory { TripDetailViewModel(tripId, container.trips, container.rivers) }
+        factory = VmFactory { TripDetailViewModel(tripId, container.trips, container.rivers, container.sync) }
     )
     val state by vm.state.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var confirmDelete by remember { mutableStateOf(false) }
+    val snackbar = remember { SnackbarHostState() }
+
+    LaunchedEffect(state.message) {
+        val text = state.message
+        if (text != null) {
+            snackbar.showSnackbar(text)
+            vm.consumeMessage()
+        }
+    }
 
     Scaffold(
         contentWindowInsets = NoInsets,
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                windowInsets = NoInsets,
-                title = { Text(state.trip?.title ?: "Spływ", maxLines = 1) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Wstecz")
-                    }
-                },
-                actions = {
-                    if (state.trip != null) {
-                        IconButton(onClick = { confirmDelete = true }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Usuń spływ")
+            Column {
+                TopAppBar(
+                    windowInsets = NoInsets,
+                    title = { Text(state.trip?.title ?: "Spływ", maxLines = 1) },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Wstecz")
+                        }
+                    },
+                    actions = {
+                        if (state.trip != null) {
+                            IconButton(onClick = vm::syncNow, enabled = !state.syncing) {
+                                Icon(
+                                    Icons.Default.Share,
+                                    contentDescription = if (state.trip?.serverId == null) {
+                                        "Udostępnij na serwerze"
+                                    } else {
+                                        "Synchronizuj z serwerem"
+                                    }
+                                )
+                            }
+                            IconButton(onClick = { confirmDelete = true }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Usuń spływ")
+                            }
                         }
                     }
-                }
-            )
+                )
+                if (state.syncing) LinearProgressIndicator(Modifier.fillMaxWidth())
+            }
         }
     ) { padding ->
         val trip = state.trip
@@ -107,6 +132,7 @@ fun TripDetailScreen(tripId: Long, onBack: () -> Unit) {
             }
             else -> Column(Modifier.fillMaxSize().padding(padding)) {
                 TripSummary(
+                    shared = trip.serverId != null,
                     date = Fmt.utcDate(trip.startDateUtcMillis),
                     overnight = trip.overnight,
                     sectionLabel = state.sectionLabel,
@@ -161,6 +187,7 @@ fun TripDetailScreen(tripId: Long, onBack: () -> Unit) {
 
 @Composable
 private fun TripSummary(
+    shared: Boolean,
     date: String,
     overnight: Boolean,
     sectionLabel: String?,
@@ -171,6 +198,14 @@ private fun TripSummary(
     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(date + if (overnight) " · z noclegiem" else " · jednodniowy", fontWeight = FontWeight.Medium)
         sectionLabel?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        Text(
+            if (shared) {
+                "Udostępniony na serwerze – zmiany innych osób pobierzesz przyciskiem synchronizacji."
+            } else {
+                "Tylko na tym telefonie – przycisk udostępniania wyśle spływ na serwer, aby dołączyła ekipa."
+            },
+            style = MaterialTheme.typography.bodySmall
+        )
         val transport = when {
             seats == 0 -> "Transport: nikt jeszcze nie zgłosił auta."
             seats < people -> "Transport: $seats miejsc w autach dla $people osób – brakuje ${people - seats}."
@@ -237,7 +272,7 @@ private fun ParticipantsTab(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = name,
-                        onValueChange = { name = it },
+                        onValueChange = { if (it.length <= 80) name = it },
                         label = { Text("Imię") },
                         singleLine = true
                     )
@@ -327,7 +362,7 @@ private fun GearTab(
             text = {
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { name = it },
+                    onValueChange = { if (it.length <= 80) name = it },
                     label = { Text("Nazwa (np. namiot 3-os.)") },
                     singleLine = true
                 )
@@ -387,8 +422,9 @@ private fun CheckInsTab(
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "Zameldowanie zapisuje pozycję GPS na tym telefonie. Udostępnianie jej " +
-                            "reszcie grupy wymaga serwera, którego ta wersja aplikacji jeszcze nie ma.",
+                        "Zameldowanie zapisuje pozycję GPS na tym telefonie. Gdy spływ jest udostępniony " +
+                            "na serwerze, pozycja trafia też do reszty grupy (pobierzesz je przyciskiem " +
+                            "synchronizacji).",
                         style = MaterialTheme.typography.bodySmall
                     )
                     if (locating) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -452,7 +488,7 @@ private fun CheckInsTab(
                     )
                     OutlinedTextField(
                         value = name,
-                        onValueChange = { name = it },
+                        onValueChange = { if (it.length <= 80) name = it },
                         label = { Text("Kto się melduje") },
                         singleLine = true
                     )

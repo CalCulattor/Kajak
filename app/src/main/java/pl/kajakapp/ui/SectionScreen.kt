@@ -62,7 +62,7 @@ fun SectionScreen(sectionId: Long, onBack: () -> Unit) {
     val container = rememberContainer()
     val vm: SectionViewModel = viewModel(
         key = "section_$sectionId",
-        factory = VmFactory { SectionViewModel(sectionId, container.rivers, container.conditions) }
+        factory = VmFactory { SectionViewModel(sectionId, container.rivers, container.conditions, container.sync) }
     )
     val state by vm.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
