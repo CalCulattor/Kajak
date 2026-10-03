@@ -135,7 +135,8 @@ fun KajakMap(
                             position = Gravity.TOP or Gravity.START
                             marginTop = 52f * density
                         }
-                        view.attribution.updateSettings { position = Gravity.TOP or Gravity.END }
+                        // Ikona „i” w prawym górnym rogu jest ukryta; logo Mapbox zostaje.
+                        view.attribution.updateSettings { enabled = false }
                     }
                     view.mapboxMap.loadStyle(if (dark) Style.DARK else Style.OUTDOORS) { style ->
                         addRouteLayers(style)

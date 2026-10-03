@@ -348,5 +348,5 @@ private fun shareText(track: TrackEntity, s: TrackSummary): String = buildString
     appendLine("Średnia: ${Fmt.speed(avgAllKmh(track, s))}, w ruchu ${Fmt.speed(s.avgMovingSpeedKmh)}")
     appendLine("Maks. prędkość: ${Fmt.speed(s.maxSpeedKmh)}")
     if (s.stops > 0) appendLine("Postoje: ${s.stops} (razem ${Fmt.duration(s.stoppedMs)})")
-    append("Zapisano w KajakApp")
+    append("Zapisano w Eddy")
 }
