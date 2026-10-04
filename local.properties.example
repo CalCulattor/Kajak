@@ -1,2 +1,0 @@
-# Skopiuj do local.properties (ten plik jest w .gitignore) i wpisz swój token publiczny Mapbox.
-MAPBOX_ACCESS_TOKEN=pk.TWOJ_TOKEN
