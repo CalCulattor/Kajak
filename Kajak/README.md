@@ -1,0 +1,128 @@
+# Eddy
+
+Aplikacja na Androida (Kotlin, Jetpack Compose, Room, Retrofit) dla kajakarzy: stan wody,
+pogoda z oceną ryzyka, przeszkody zgłaszane przez społeczność oraz organizacja spływów.
+
+## Uruchomienie
+
+1. Otwórz folder w **Android Studio** (Ladybug lub nowsze, JDK 17). Studio samo pobierze Gradle 8.9
+   na podstawie `gradle/wrapper/gradle-wrapper.properties` i zsynchronizuje projekt.
+   (Terminalowy `./gradlew` pojawi się po wykonaniu raz `gradle wrapper` w tym folderze.)
+2. Uruchom konfigurację `app` na emulatorze lub telefonie (Android 8.0+, `minSdk 26`).
+3. Testy jednostkowe logiki ryzyka: `./gradlew :app:testDebugUnitTest`.
+
+## Co jest zaimplementowane
+
+| Obszar | Stan |
+|---|---|
+| Rzeki i odcinki (spływ odcinkowo) | lista, opis, trudność, start/meta; przykładowe dane startowe w `SeedData.kt` |
+| Stan wody | pobierany z publicznego API IMGW (`danepubliczne.imgw.pl`). Bez wpisanego wodowskazu aplikacja sama wybiera najbliższą stację na tej samej rzece (do 60 km); nazwy porównuje bez względu na wielkość liter i polskie znaki. Progi ostrzegawczy/alarmowy są używane, gdy stacja je podaje – w przeciwnym razie odczyt jest tylko informacją, a ocenę wyznaczają pogoda i przeszkody |
+| Pogoda | Open-Meteo (porywy wiatru, opady, burze, temperatura). Na ekranie odcinka przycisk **Sprawdź warunki na termin** ocenia wybrany dzień (do 16 dni naprzód) i godzinę – okno 4 godzin od wybranej godziny; stan wody jest wtedy tylko aktualnym odczytem, bo nie da się go prognozować. Ocena pogody na termin spływu pokazuje się też w szczegółach spływu |
+| Ocena ryzyka | `domain/RiskAssessor.kt`: „sprzyjające / podwyższone / skrajne / brak danych” z uzasadnieniem i zastrzeżeniem, nigdy „bezpiecznie” |
+| Dane offline | ostatni odczyt jest zapisywany w bazie; dane starsze niż 6 godz. są pokazywane, ale **nie** wchodzą do oceny ryzyka |
+| Przeszkody | zgłaszanie (z pozycją GPS), „nadal tu jest” / „już usunięte”, zniknięcie po 2 zgłoszeniach usunięcia, oznaczenie zgłoszeń nieweryfikowanych 30+ dni |
+| Spływy | uczestnicy, miejsca w autach vs liczba osób, kajaki do wypożyczenia, lista wyposażenia: organizator zaznacza elementy z propozycji (także dla noclegu) i oznacza je jako **wymagane** lub **zalecane**, a każdy uczestnik potwierdza, że dany element ma – pozycja zmienia kolor z czerwonego na zielony |
+| Zameldowanie / pomoc | zapis pozycji GPS (świeżej, a gdy się nie da – ostatniej znanej, z informacją o jej wieku) i otwarcie w aplikacji map |
+| Dodawanie tras | przycisk **+** na liście rzek; trasa zapisuje się lokalnie i jest wysyłana na serwer |
+| Konta | rejestracja i logowanie nazwą użytkownika i hasłem (bez e-maila, nazwa unikalna), ikona ustawień → „Zaloguj / zarejestruj” |
+| Serwer (synchronizacja) | adres serwera jest stały i nie jest pokazywany w aplikacji; zmienia się go w kodzie (`ServerSettings.DEFAULT_URL`); trasy, przeszkody, spływy, zameldowania |
+
+## Serwer i synchronizacja
+
+Aplikacja działa najpierw lokalnie (Room), a serwer (`server/`, Go) służy do dzielenia się danymi.
+Adres ustawiasz na ekranie **Serwer** (ikona ustawień na listach rzek i spływów); pusty adres
+wyłącza synchronizację. „Testuj połączenie” sprawdza `GET /api/health`.
+
+| Funkcja | Jak działa |
+|---|---|
+| Trasy | **+** na liście rzek → formularz. Trasa trafia na serwer (`POST /api/routes`); lista rzek przy wejściu i po kliknięciu odświeżenia wysyła lokalne trasy i pobiera trasy innych. Oznaczenie „Czeka na wysłanie na serwer”, dopóki się nie uda. |
+| Przeszkody | zgłoszenia i głosy „nadal tu jest” / „już usunięte” są wysyłane od razu; gdy nie ma sieci, czekają i idą przy następnym odświeżeniu odcinka. Liczniki z serwera zastępują lokalne. |
+| Spływy | po zalogowaniu nazwa konta jest automatycznie imieniem organizatora (bez pytania o imię). Ikona udostępniania wysyła spływ na serwer; potem ta sama ikona synchronizuje. **Spływy → Dołącz** pozwala dołączyć do spływu z serwera jako siebie. Spływ znika z listy następnego dnia po terminie (dane zostają na telefonie i na serwerze). |
+| Uprawnienia w spływie | usunąć spływ może tylko organizator (znika u wszystkich); uczestnik może tylko opuścić spływ (znika u niego z listy); każdy dodaje i edytuje tylko siebie; zameldować można tylko siebie. Spływ usunięty przez organizatora lub opuszczony znika z telefonu przy wejściu na listę spływów. |
+| Zameldowania | w udostępnionym spływie idą na serwer od razu; w nieudostępnionym zostają na telefonie. |
+
+Ograniczenia: bez konta aplikacja działa lokalnie i czyta trasy/przeszkody, ale wysyłanie danych i spływy
+na serwerze wymagają logowania. Konto nie ma odzyskiwania hasła. Trasy i przeszkody są publiczne,
+spływy widzą tylko ich uczestnicy (administrator serwera widzi wszystko). Przy synchronizacji spływu
+wygrywa stan z serwera. Usunięcie lub opuszczenie udostępnionego spływu wymaga połączenia (jest
+awaryjna opcja „Tylko z telefonu”, która nie zmienia serwera). Osoby wpisane ręcznie do spływu
+lokalnego nie trafiają na serwer – zostają „tylko na tym telefonie”. Zalogowanie na inne konto lub
+inny serwer usuwa z telefonu kopie spływów poprzedniego konta.
+Trasy wymagają serwera z endpointem `/api/routes` (jest w `server/`; starsza wersja serwera zwróci 404
+i aplikacja pokaże komunikat).
+
+Aktualizacje na żywo: gdy aplikacja jest na ekranie i jesteś zalogowany, trzyma połączenie z serwerem (`GET /api/events`). Kiedy ktoś dołączy do spływu, doda sprzęt, zamelduje się albo zgłosi przeszkodę, Twój telefon sam pobiera zmianę – bez ręcznego odświeżania. Po zerwaniu połączenia aplikacja łączy się ponownie i nadrabia zaległości. Przy spływie widać, kto jest organizatorem.
+
+Organizatorzy: spływ może mieć kilku organizatorów. Organizator mianuje innych uczestników organizatorami (zakładka Uczestnicy → „Mianuj organizatorem”) i może usunąć spływ dla wszystkich. Organizator może opuścić spływ, gdy jest drugi organizator – spływ zostaje. Jedyny organizator nie może wyjść (najpierw mianuje następcę albo usuwa spływ). Zwykły uczestnik może spływ tylko opuścić na serwerze (nie da się go usunąć wyłącznie lokalnie). Terminu spływu nie można ustawić w przeszłości.
+
+## Nagrywanie trasy i historia spływów
+
+Zakładka **Historia** → „Rozpocznij trasę”. Aplikacja prosi o dokładną lokalizację (i o zgodę na powiadomienia),
+a potem zapisuje pozycję GPS co ok. 3 s w usłudze pierwszoplanowej (z powiadomieniem), więc nagrywanie działa
+także przy wygaszonym ekranie. Trasę kończysz przyciskiem na ekranie nagrywania albo „Zakończ” w powiadomieniu.
+Można ją przypisać do spływu (opcjonalnie). Każdy odczyt trafia od razu do bazy – po zamknięciu aplikacji przez
+system trasa zostaje i można ją wznowić albo zapisać.
+
+Po zakończeniu powstaje analiza: dystans, czas całkowity i w ruchu, postoje (od 2 min), średnia prędkość
+(całość i w ruchu), prędkość maksymalna (wygładzona z okna 10 s), tempo min/km, wykres prędkości w czasie,
+ślad na planszy (bez mapy, działa offline) oraz czasy kolejnych kilometrów. Zakładka Historia pokazuje też
+sumy ze wszystkich tras oraz mapę ze wszystkimi dotychczas przepłyniętymi trasami (dotknięcie otwiera ją na pełnym ekranie). Logika (`domain/TrackStats.kt`) odrzuca niedokładne odczyty (> 50 m), skoki GPS
+szybsze niż 32 km/h i „drżenie” na postoju. Historia jest zapisana tylko na telefonie (nie jest wysyłana na serwer)
+i przypisana do konta, na którym nagrano trasę.
+
+Uwaga: niektórzy producenci (Xiaomi, Huawei, Samsung) agresywnie zamykają aplikacje w tle – wyłącz dla KajakApp
+oszczędzanie baterii, jeśli nagrywanie się urywa.
+
+## Czego jeszcze nie ma (świadomie)
+
+- **Map offline** i rysowania trasy na mapie (pozycje otwierają się w zewnętrznej aplikacji map).
+- **Rozbudowanej bazy rzek.** `SeedData.kt` zawiera dwa przykładowe odcinki; ich trudność i długość
+  trzeba zweryfikować. Wodowskaz ustawia się w aplikacji (nazwa stacji jak w danych IMGW).
+- Odzyskiwania hasła, zmiany hasła i usuwania konta; edycji i usuwania tras.
+
+## Struktura
+
+```
+domain/   czysta logika (ryzyko, świeżość danych, reguły przeszkód) + testy w app/src/test
+data/     Room (db/), klienty API (remote/), repozytoria
+ui/       ekrany Compose, ViewModele, nawigacja
+util/     lokalizacja, formatowanie
+```
+
+## Interfejs
+
+Dolny pasek ma cztery zakładki w kolejności: **Start** (mapa, przycisk rozpoczęcia trasy, a w trakcie nagrywania statystyki na żywo i „Zakończ”), **Historia** (statystyki ogólne i trasy pogrupowane miesiącami), **Spływy**, **Rzeki**. Motyw (`ui/Theme.kt`) jest zawsze nocny z neonami: granatowo-czarne tło, turkusowy kolor główny, limonkowy akcent tylko dla startu i nagrywania oraz fiolet pomocniczy; mapa też jest ciemna. Przycisk „Rozpocznij trasę” ma gradient i delikatnie „oddycha”, nagrywanie oznacza pulsujący punkt, karty mają cienkie obwódki i animują zmianę wysokości, a pod tytułem każdego ekranu jest neonowa linia. Ekrany przechodzą między sobą płynnym zanikaniem. Cyfry są tabelaryczne, elementy dotykowe duże.
+
+## Mapy (Mapbox)
+
+Ekran Start pokazuje mapę Mapbox na całą stronę (pozycja użytkownika i ślad nagrywanej trasy), a szczegóły trasy w Historii rysują jej przebieg na mapie.
+
+Konfiguracja:
+1. Utwórz `local.properties` w katalogu głównym projektu (jest w `.gitignore`) i dodaj token **publiczny** (`pk.…`):
+   `MAPBOX_ACCESS_TOKEN=pk.xxxxx` (wzór: `local.properties.example`). Android Studio dopisze tam też `sdk.dir`.
+2. Zbuduj aplikację. Token trafia do zasobu `mapbox_access_token` przez `resValue`, więc nie ma go w kodzie ani w repozytorium.
+3. Repozytorium SDK jest dodane w `settings.gradle.kts`. Gdyby synchronizacja Gradle zwróciła 401, dodaj w `~/.gradle/gradle.properties` (Windows: `C:\Users\<ty>\.gradle\gradle.properties`, poza projektem) linię `MAPBOX_DOWNLOADS_TOKEN=sk.…` – token tajny z uprawnieniem `DOWNLOADS:READ`; `settings.gradle.kts` użyje go automatycznie. Nigdy nie wpisuj go do repozytorium.
+
+Wersja SDK jest w `gradle/libs.versions.toml` (`mapbox`). Bez tokenu mapa wyświetla komunikat zamiast kafelków.
+
+## Pauza trasy
+
+Podczas nagrywania panel na ekranie Start ma przyciski „Wstrzymaj/Wznów” i „Zakończ” oraz przełącznik „Ukryj/Pokaż statystyki”. Pauza zatrzymuje licznik czasu i pomija odczyty GPS; jej czas jest zapisywany (`pausedMs`, migracja bazy 5→6) i odejmowany od czasu trasy w historii i szczegółach. Ograniczenia: stan pauzy żyje w pamięci (po zabiciu aplikacji trasa wraca do wznowienia jako nie wstrzymana), a lokalizacja jest w trakcie pauzy nadal odbierana (usługa działa), tylko nie zapisywana.
+
+## Współdzielenie pozycji i wezwanie pomocy
+
+- Pozycje innych widać **tylko podczas nagrywania trasy przypisanej do spływu z serwera** i tylko osób z tego samego spływu (uczestników). Okno „Rozpocznij trasę” domyślnie przypisuje trasę do spływu trwającego teraz (od dnia przed startem do 4 dni po).
+- Twoją pozycję (`PUT /api/trips/{id}/location`) wysyła co ok. 10 s usługa nagrywania, a po zakończeniu trasy aplikacja ją usuwa (`DELETE /api/trips/{id}/location`); bez sygnału wygasa na serwerze po 90 s. Serwer pokazuje pozycje na żywo tylko temu, kto sam je teraz udostępnia. Ekran Start co 8 s pobiera pozycje i rysuje je na mapie (pomarańczowe punkty z nazwami).
+- Wezwania pomocy widzą uczestnicy spływu (grupa) oraz każdy, kto jest w tej chwili w trasie na tej samej rzece (nawet w innym spływie; „ta sama rzeka” = ten sam człon rzeki w kluczu odcinka albo ta sama nazwa rzeki trasy). Osoby spoza grupy dostają tylko: kto, gdzie, na jakiej rzece. W spływie – zawsze – także bez nagrywania – jako czerwony punkt.
+- Problemy (brak sieci, stary serwer bez `/locations`, brak uczestnictwa) pokazują się nad panelem trasy zamiast być ukrywane. Wezwania pomocy są pokazywane także z danych zapisanych na telefonie, gdy serwer nie odpowiada.
+- Ikona ostrzeżenia obok ustawień na ekranie Start wzywa pomoc: po potwierdzeniu zapisuje zameldowanie z `needs_help` i wysyła je do spływu. Pozostali uczestnicy widzą czerwony baner „… wzywa pomocy!”, a osoba jest podświetlona na mapie na czerwono (przycisk „Pokaż na mapie” przenosi kamerę). Autor może wezwanie odwołać z banera. Przycisk SOS jest widoczny tylko podczas trwającej trasy.
+- Wskaźnik GPS w lewym górnym rogu mapy pokazuje: jest sygnał / szukam sygnału / GPS wyłączony. Wezwanie pomocy nie zastępuje numeru alarmowego 112.
+
+## Powiadomienia
+
+- Kanały: **Wezwania pomocy (SOS)** (wysoki priorytet, także na pierwszym planie), **Warunki na rzece** oraz **Nagrywanie trasy**. Przełączniki i prośba o zgodę (Android 13+) są w ustawieniach.
+- SOS: serwer udostępnia `GET /api/sos` oraz zdarzenie SSE `sos`; aplikacja pokazuje alarm (z możliwością otwarcia spływu), a po odwołaniu wezwania usuwa powiadomienie.
+- Zmiana warunków: dla spływów z najbliższych 3 dni aplikacja porównuje ocenę (sprzyjające / podwyższone / skrajne) z ostatnio znaną i powiadamia o poprawie lub pogorszeniu. Brak danych nigdy nie jest „zmianą”.
+- W tle: alarm co ok. 15 min (bez Firebase i WorkManagera, więc system może go opóźnić w trybie oszczędzania baterii); podczas nagrywania trasy połączenie na żywo działa także w tle, więc SOS dociera od razu.
+- Powiadomienie przy nagrywaniu: dystans, prędkość, średnia, maks., czas w ruchu, stoper oraz akcje „Pauza/Wznów” i „Zakończ”.
+- Baza rzek: ok. 30 rzek i kilkadziesiąt odcinków (orientacyjne dane – zweryfikuj w przewodniku); dodawane przy aktualizacji bez nadpisywania.
