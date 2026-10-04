@@ -32,7 +32,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import pl.kajakapp.KajakApp
 import pl.kajakapp.MainActivity
+import pl.kajakapp.data.LiveTrack
 import pl.kajakapp.data.TrackRecorder
+import pl.kajakapp.util.Fmt
 import pl.kajakapp.domain.TrackPoint
 
 /**
@@ -133,9 +135,15 @@ class TrackingService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        lastStartId = startId
+        if (intent?.action != ACTION_TOGGLE_PAUSE) lastStartId = startId
         when (intent?.action) {
             ACTION_STOP -> commands.trySend(Command.Stop(startId))
+            ACTION_TOGGLE_PAUSE -> scope.launch {
+                val current = recorder.live.value ?: return@launch
+                recorder.setPaused(!current.paused)
+                lastNotificationAt = 0L
+                refreshNotification()
+            }
             ACTION_START -> {
                 val title = intent?.getStringExtra(EXTRA_TITLE).orEmpty()
                 if (!enterForeground(title.ifBlank { "Trasa" })) return START_NOT_STICKY
@@ -301,10 +309,8 @@ class TrackingService : Service() {
         if (live.paused == lastNotificationPaused && now - lastNotificationAt < NOTIFICATION_EVERY_MS) return
         lastNotificationAt = now
         lastNotificationPaused = live.paused
-        val stats = "%.2f km\t%.1f km/h".format(live.distanceM / 1000.0, live.speedKmh)
-        val text = if (live.paused) "Wstrzymano\t$stats" else stats
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
-            .notify(NOTIFICATION_ID, buildNotification(live.title, text, live.startedAt, live.paused, live.pausedMs))
+            .notify(NOTIFICATION_ID, buildNotification(live.title, null, live.startedAt, live.paused, live.pausedMs, live))
     }
 
     private fun buildNotification(
@@ -312,7 +318,8 @@ class TrackingService : Service() {
         text: String?,
         startedAt: Long,
         paused: Boolean = false,
-        pausedMs: Long = 0
+        pausedMs: Long = 0,
+        live: LiveTrack? = null
     ): Notification {
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
@@ -322,16 +329,36 @@ class TrackingService : Service() {
             this, 1, Intent(this, TrackingService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        val toggle = PendingIntent.getService(
+            this, 2, Intent(this, TrackingService::class.java).setAction(ACTION_TOGGLE_PAUSE),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val summary = live?.let { Fmt.distance(it.distanceM) + "  ·  " + (if (it.paused) "wstrzymano" else Fmt.speed(it.speedKmh)) }
+        val avgKmh = live?.takeIf { it.movingMs > 0 }?.let { it.distanceM / 1000.0 / (it.movingMs / 3_600_000.0) }
+        val details = live?.let {
+            buildString {
+                append("Dystans: ").append(Fmt.distance(it.distanceM))
+                append("\nPrędkość: ").append(if (it.paused) "wstrzymano" else Fmt.speed(it.speedKmh))
+                if (avgKmh != null) append("\nŚrednia: ").append(Fmt.speed(avgKmh))
+                append("\nMaks.: ").append(Fmt.speed(it.maxSpeedKmh))
+                append("\nW ruchu: ").append(Fmt.duration(it.movingMs))
+                if (!it.gpsEnabled) append("\n⚠ GPS wyłączony")
+            }
+        }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-            .setContentTitle("Nagrywanie trasy: $title")
-            .setContentText(text ?: "Czekam na sygnał GPS…")
+            .setContentTitle(if (paused) "Wstrzymano: $title" else "Nagrywanie: $title")
+            .setContentText(summary ?: text ?: "Czekam na sygnał GPS…")
+            .apply { if (details != null) setStyle(NotificationCompat.BigTextStyle().bigText(details)) }
+            .setCategory(NotificationCompat.CATEGORY_WORKOUT)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             // Stoper w powiadomieniu nie liczy pauz (przy pauzie jest wyłączony).
             .setWhen(startedAt + pausedMs)
             .setUsesChronometer(!paused)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(open)
+            .addAction(0, if (paused) "Wznów" else "Pauza", toggle)
             .addAction(0, "Zakończ", stop)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
@@ -356,13 +383,14 @@ class TrackingService : Service() {
         private const val TAG = "TrackingService"
         private const val CHANNEL_ID = "tracking"
         private const val NOTIFICATION_ID = 42
-        private const val NOTIFICATION_EVERY_MS = 10_000L
+        private const val NOTIFICATION_EVERY_MS = 3_000L
         private const val SHARE_EVERY_MS = 10_000L
         private const val UPDATE_INTERVAL_MS = 3_000L
         private const val WAKE_LOCK_MAX_MS = 12 * 60 * 60 * 1000L
         private const val ACTION_START = "pl.kajakapp.tracking.START"
         private const val ACTION_RESUME = "pl.kajakapp.tracking.RESUME"
         private const val ACTION_STOP = "pl.kajakapp.tracking.STOP"
+        private const val ACTION_TOGGLE_PAUSE = "pl.kajakapp.tracking.TOGGLE_PAUSE"
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_TRIP_ID = "trip_id"
         private const val EXTRA_TRIP_TITLE = "trip_title"

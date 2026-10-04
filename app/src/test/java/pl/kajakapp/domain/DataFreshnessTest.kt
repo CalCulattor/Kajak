@@ -22,8 +22,14 @@ class DataFreshnessTest {
 
     @Test
     fun freshFetchButOldMeasurement_isStale() {
-        val w = WaterReading("S", 100, measuredAtMillis = now - 10 * hour, fetchedAt = now)
+        val w = WaterReading("S", 100, measuredAtMillis = now - 13 * hour, fetchedAt = now)
         assertFalse(DataFreshness.isFresh(w, now))
+    }
+
+    @Test
+    fun stationReportingFewTimesADay_isStillFreshWithin12Hours() {
+        val w = WaterReading("S", 100, measuredAtMillis = now - 10 * hour, fetchedAt = now)
+        assertTrue(DataFreshness.isFresh(w, now))
     }
 
     @Test

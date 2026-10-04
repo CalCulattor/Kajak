@@ -3,18 +3,22 @@ package pl.kajakapp.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import pl.kajakapp.data.ConditionsRepository
 import pl.kajakapp.data.FetchStatus
+import pl.kajakapp.data.ForecastStatus
 import pl.kajakapp.data.LiveUpdates
 import pl.kajakapp.data.RefreshResult
 import pl.kajakapp.data.RemoteTripInfo
@@ -31,6 +35,7 @@ import pl.kajakapp.data.db.SectionEntity
 import pl.kajakapp.data.db.SectionWithRiver
 import pl.kajakapp.data.db.TripEntity
 import pl.kajakapp.domain.DataFreshness
+import pl.kajakapp.domain.GearRules
 import pl.kajakapp.domain.Difficulty
 import pl.kajakapp.domain.ObstacleRules
 import pl.kajakapp.domain.ObstacleType
@@ -40,6 +45,14 @@ import pl.kajakapp.domain.RiverType
 import pl.kajakapp.domain.WaterReading
 import pl.kajakapp.domain.WeatherSnapshot
 import pl.kajakapp.util.GeoPoint
+import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
+import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 class VmFactory<T : ViewModel>(private val producer: () -> T) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
@@ -126,6 +139,69 @@ class AddRouteViewModel(private val rivers: RiverRepository) : ViewModel() {
     }
 }
 
+// ---------------------------------------------------------------- Prognoza na termin
+
+/** Wynik sprawdzenia warunków na wybrany termin (ekran odcinka i szczegóły spływu). */
+data class ForecastUi(
+    val loading: Boolean = false,
+    /** Opis terminu, np. "pon. 05.10, 10:00–14:00". */
+    val whenText: String? = null,
+    val weather: WeatherSnapshot? = null,
+    val risk: RiskAssessment? = null,
+    /** Powód braku wyniku (termin za daleko, brak sieci…). */
+    val message: String? = null
+)
+
+private val FORECAST_ZONE: ZoneId = ZoneId.of("Europe/Warsaw")
+private val FORECAST_DAY_FORMAT = DateTimeFormatter.ofPattern("EEE dd.MM", Locale.forLanguageTag("pl-PL"))
+private val FORECAST_CLOCK_FORMAT = DateTimeFormatter.ofPattern("HH:mm")
+
+/** Początek spływu jako czas lokalny; bez godziny przyjmujemy 10:00. */
+internal fun tripStart(trip: TripEntity): LocalDateTime {
+    val date = Instant.ofEpochMilli(trip.startDateUtcMillis).atZone(ZoneOffset.UTC).toLocalDate()
+    val time = runCatching { LocalTime.parse(trip.startTime) }.getOrNull() ?: LocalTime.of(10, 0)
+    return date.atTime(time)
+}
+
+internal fun forecastDays(): List<LocalDate> = pl.kajakapp.domain.ForecastWindow.days(LocalDate.now(FORECAST_ZONE))
+
+private fun forecastLabel(start: LocalDateTime): String {
+    val from = start.withMinute(0)
+    val to = from.plusHours(pl.kajakapp.domain.ForecastWindow.DEFAULT_HOURS.toLong())
+    return "${FORECAST_DAY_FORMAT.format(from)}, ${FORECAST_CLOCK_FORMAT.format(from)}–${FORECAST_CLOCK_FORMAT.format(to)}"
+}
+
+/** Pobiera prognozę na termin i ocenia warunki (pogoda na termin + aktualny wodowskaz i przeszkody). */
+internal suspend fun loadForecast(
+    conditions: ConditionsRepository,
+    lat: Double,
+    lon: Double,
+    start: LocalDateTime,
+    water: WaterReading?,
+    obstacles: List<ObstacleType>
+): ForecastUi {
+    val label = forecastLabel(start)
+    val fetch = conditions.forecast(lat, lon, start)
+    return when (fetch.status) {
+        ForecastStatus.OK -> {
+            val weather = fetch.weather
+            ForecastUi(
+                whenText = label,
+                weather = weather,
+                risk = RiskAssessor.assess(water, weather, obstacles, forecast = true)
+            )
+        }
+        ForecastStatus.PAST ->
+            ForecastUi(whenText = label, message = "Ten termin już minął – wybierz dzisiejszy lub późniejszy.")
+        ForecastStatus.TOO_FAR ->
+            ForecastUi(whenText = label, message = "Prognoza jest dostępna najwyżej 16 dni naprzód.")
+        ForecastStatus.NO_DATA ->
+            ForecastUi(whenText = label, message = "Brak prognozy na ten termin.")
+        ForecastStatus.ERROR ->
+            ForecastUi(whenText = label, message = "Nie udało się pobrać prognozy (brak sieci?).")
+    }
+}
+
 // ---------------------------------------------------------------- Odcinek
 
 data class ObstacleItem(val entity: ObstacleEntity, val stale: Boolean)
@@ -140,7 +216,9 @@ data class SectionUiState(
     val obstacles: List<ObstacleItem> = emptyList(),
     val risk: RiskAssessment? = null,
     val refreshing: Boolean = false,
-    val message: String? = null
+    val message: String? = null,
+    /** Warunki na termin wybrany przez użytkownika (null = jeszcze nie sprawdzano). */
+    val forecast: ForecastUi? = null
 )
 
 class SectionViewModel(
@@ -152,6 +230,8 @@ class SectionViewModel(
 
     private val refreshing = MutableStateFlow(false)
     private val message = MutableStateFlow<String?>(null)
+    private val forecast = MutableStateFlow<ForecastUi?>(null)
+    private var forecastJob: Job? = null
 
     private val data = combine(
         rivers.observeSection(sectionId),
@@ -185,9 +265,24 @@ class SectionViewModel(
     }
 
     val state: StateFlow<SectionUiState> =
-        combine(data, refreshing, message) { d, isRefreshing, msg ->
-            d.copy(refreshing = isRefreshing, message = msg)
+        combine(data, refreshing, message, forecast) { d, isRefreshing, msg, fc ->
+            d.copy(refreshing = isRefreshing, message = msg, forecast = fc)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), SectionUiState())
+
+    /** Sprawdza warunki na wybrany dzień i godzinę (okno kilku godzin od tej godziny). */
+    fun checkForecast(date: LocalDate, hour: Int) {
+        val current = state.value
+        val section = current.section?.section ?: return
+        val water = current.water?.takeIf { DataFreshness.isFresh(it, System.currentTimeMillis()) }
+        val obstacles = current.obstacles.map { it.entity.type }
+        forecastJob?.cancel()
+        forecast.value = ForecastUi(loading = true)
+        forecastJob = viewModelScope.launch {
+            forecast.value = loadForecast(
+                conditions, section.lat, section.lon, date.atTime(hour.coerceIn(0, 23), 0), water, obstacles
+            )
+        }
+    }
 
     init {
         refresh()
@@ -273,7 +368,9 @@ class SectionViewModel(
                     add("Nie udało się pobrać stanu wody (brak sieci?). Pokazuję ostatnie dane.")
                 FetchStatus.NOT_FOUND ->
                     add("Nie znaleziono wodowskazu o tej nazwie w danych IMGW.")
-                FetchStatus.OK, FetchStatus.NO_STATION -> Unit
+                FetchStatus.NO_STATION ->
+                    add("Nie znaleziono wodowskazu IMGW w pobliżu tego odcinka – możesz ustawić go ręcznie.")
+                FetchStatus.OK -> Unit
             }
             if (result.weather == FetchStatus.ERROR) {
                 add("Nie udało się pobrać pogody. Pokazuję ostatnie dane.")
@@ -419,22 +516,56 @@ data class TripDetailState(
     val message: String? = null,
     /** Zalogowane konto (null = niezalogowany). */
     val currentUser: String? = null,
+    /** Kto potwierdza wyposażenie na tym telefonie: konto albo „Ja” w spływie bez logowania. */
+    val viewer: String = GearRules.LOCAL_VIEWER,
     /** true dla organizatora (a w spływie tylko lokalnym – zawsze). */
     val isOrganizer: Boolean = true,
     /** true, gdy w spływie jest jeszcze inny organizator, więc organizator może go opuścić. */
-    val hasOtherOrganizer: Boolean = false
+    val hasOtherOrganizer: Boolean = false,
+    /** Ocena warunków na termin spływu (null = spływ bez przypisanego odcinka). */
+    val forecast: ForecastUi? = null
 )
+
+private data class ForecastTarget(val sectionId: Long, val lat: Double, val lon: Double, val start: LocalDateTime)
 
 class TripDetailViewModel(
     private val tripId: Long,
     private val trips: TripRepository,
     rivers: RiverRepository,
     private val sync: SyncRepository,
-    settings: ServerSettings
+    settings: ServerSettings,
+    private val conditions: ConditionsRepository
 ) : ViewModel() {
 
     private val syncing = MutableStateFlow(false)
     private val message = MutableStateFlow<String?>(null)
+    private val tripForecast = MutableStateFlow<ForecastUi?>(null)
+
+    init {
+        // Ocena pogody na termin spływu odświeża się przy zmianie odcinka, daty albo godziny.
+        viewModelScope.launch {
+            combine(trips.observeTrip(tripId), rivers.observeAllSections()) { trip, sections ->
+                val section = trip?.sectionId?.let { id -> sections.firstOrNull { it.section.id == id }?.section }
+                if (trip == null || section == null) {
+                    null
+                } else {
+                    ForecastTarget(section.id, section.lat, section.lon, tripStart(trip))
+                }
+            }.distinctUntilChanged().collectLatest { target ->
+                if (target == null) {
+                    tripForecast.value = null
+                } else {
+                    tripForecast.value = ForecastUi(loading = true)
+                    val water = conditions.observeWater(target.sectionId).first()
+                        ?.takeIf { DataFreshness.isFresh(it, System.currentTimeMillis()) }
+                    val obstacles = rivers.observeObstacles(target.sectionId).first()
+                        .filter { ObstacleRules.isActive(it.confirmations, it.removalVotes) }
+                        .map { it.type }
+                    tripForecast.value = loadForecast(conditions, target.lat, target.lon, target.start, water, obstacles)
+                }
+            }
+        }
+    }
 
     private val data = combine(
         trips.observeTrip(tripId),
@@ -457,7 +588,7 @@ class TripDetailViewModel(
     }
 
     val state: StateFlow<TripDetailState> =
-        combine(data, syncing, message, settings.session) { d, isSyncing, msg, session ->
+        combine(data, syncing, message, settings.session, tripForecast) { d, isSyncing, msg, session, fc ->
             val user = session?.username
             val trip = d.trip
             val me = d.participants.firstOrNull { it.name.equals(user, ignoreCase = true) }
@@ -467,8 +598,10 @@ class TripDetailViewModel(
                 syncing = isSyncing,
                 message = msg,
                 currentUser = user,
+                viewer = user ?: GearRules.LOCAL_VIEWER,
                 isOrganizer = organizer,
-                hasOtherOrganizer = otherOrganizer
+                hasOtherOrganizer = otherOrganizer,
+                forecast = fc
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), TripDetailState())
 
@@ -521,39 +654,41 @@ class TripDetailViewModel(
         }
     }
 
-    fun addGear(name: String) {
-        viewModelScope.launch {
-            trips.addGear(tripId, name)
-            syncIfShared()
-        }
-    }
-
-    fun addSuggestedGear() {
+    /** Dodaje wybrane pozycje wyposażenia (nazwa + „required”/„recommended”); robi to organizator. */
+    fun addGearItems(items: List<Pair<String, String>>) {
+        if (items.isEmpty()) return
         val current = state.value
-        val trip = current.trip ?: return
+        if (!current.isOrganizer) return
         viewModelScope.launch {
-            trips.addSuggestedGear(tripId, trip.overnight, current.gear.map { it.name }.toSet())
+            trips.addGearItems(tripId, items, current.gear.map { it.name }.toSet())
             syncIfShared()
         }
     }
 
-    fun setGearPacked(id: Long, packed: Boolean) {
+    /** Uczestnik potwierdza (albo cofa potwierdzenie), że ma dany element – zawsze za siebie. */
+    fun toggleGearConfirmed(id: Long) {
+        val current = state.value
+        val gear = current.gear.firstOrNull { it.id == id } ?: return
+        val confirmed = !GearRules.isConfirmed(gear.confirmedBy, current.viewer)
         viewModelScope.launch {
-            trips.setGearPacked(id, packed)
-            pushGear(id)
+            trips.setGearConfirmed(id, current.viewer, confirmed)
+            val result = sync.pushGearConfirmation(id, confirmed)
+            if (!result.ok && result.message.isNotEmpty()) {
+                message.value = "Zapisano na telefonie. ${result.message}"
+            }
         }
     }
 
-    fun assignGear(id: Long, assignee: String?) {
+    /** Organizator zmienia pozycję na wymaganą albo zalecaną. */
+    fun setGearRequirement(id: Long, requirement: String) {
+        if (!state.value.isOrganizer) return
         viewModelScope.launch {
-            trips.assignGear(id, assignee)
-            pushGear(id)
+            trips.setGearRequirement(id, requirement)
+            val result = sync.pushGearRequirement(id)
+            if (!result.ok && result.message.isNotEmpty()) {
+                message.value = "Zapisano na telefonie. ${result.message}"
+            }
         }
-    }
-
-    private suspend fun pushGear(id: Long) {
-        val result = sync.pushGear(id)
-        if (!result.ok && result.message.isNotEmpty()) message.value = result.message
     }
 
     fun removeGear(id: Long) {

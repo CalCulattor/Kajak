@@ -325,6 +325,12 @@ func (st *Store) tripDetailLocked(id int64) (TripDetail, error) {
 	}
 	for _, g := range st.s.Gear {
 		if g.TripID == id {
+			if g.Requirement == "" {
+				g.Requirement = GearRecommended
+			}
+			if g.ConfirmedBy == nil {
+				g.ConfirmedBy = []string{}
+			}
 			d.Gear = append(d.Gear, g)
 		}
 	}
@@ -494,6 +500,8 @@ func (st *Store) LeaveTrip(tripID, participantID int64, username string) error {
 					strings.EqualFold(*s.Gear[j].AssignedTo, p.Name) {
 					s.Gear[j].AssignedTo = nil
 				}
+				// Potwierdzenia osoby, która odeszła, znikają razem z nią.
+				s.Gear[j].ConfirmedBy = removeName(s.Gear[j].ConfirmedBy, p.Name)
 			}
 			return nil
 		}
@@ -524,12 +532,27 @@ func (st *Store) PromoteOrganizer(tripID, participantID int64, actor string) (ou
 	return
 }
 
+// removeName zwraca listę bez podanej nazwy (bez rozróżniania wielkości liter).
+func removeName(list []string, name string) []string {
+	out := make([]string, 0, len(list))
+	for _, n := range list {
+		if !strings.EqualFold(n, name) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 func (st *Store) AddGear(tripID int64, g GearItem) (GearItem, error) {
 	var out GearItem
 	err := st.mutate(func(s *state) error {
 		if !tripExists(s, tripID) {
 			return errNotFound
 		}
+		if !validRequirement(g.Requirement) {
+			g.Requirement = GearRecommended
+		}
+		g.ConfirmedBy = []string{}
 		g.ID = st.nextIDIn(s)
 		g.TripID = tripID
 		s.Gear = append(s.Gear, g)
@@ -545,6 +568,7 @@ type GearPatch struct {
 	AssignedToSet bool
 	AssignedTo    *string
 	Packed        *bool
+	Requirement   *string
 }
 
 func (st *Store) UpdateGear(tripID, id int64, patch GearPatch) (GearItem, error) {
@@ -560,7 +584,34 @@ func (st *Store) UpdateGear(tripID, id int64, patch GearPatch) (GearItem, error)
 			if patch.Packed != nil {
 				s.Gear[i].Packed = *patch.Packed
 			}
+			if patch.Requirement != nil {
+				s.Gear[i].Requirement = *patch.Requirement
+			}
 			out = s.Gear[i]
+			return nil
+		}
+		return errNotFound
+	})
+	return out, err
+}
+
+// SetGearConfirmed zapisuje (albo cofa) potwierdzenie użytkownika, że ma dany element wyposażenia.
+func (st *Store) SetGearConfirmed(tripID, id int64, username string, confirmed bool) (GearItem, error) {
+	var out GearItem
+	err := st.mutate(func(s *state) error {
+		for i := range s.Gear {
+			if s.Gear[i].ID != id || s.Gear[i].TripID != tripID {
+				continue
+			}
+			list := removeName(s.Gear[i].ConfirmedBy, username)
+			if confirmed {
+				list = append(list, username)
+			}
+			s.Gear[i].ConfirmedBy = list
+			out = s.Gear[i]
+			if out.Requirement == "" {
+				out.Requirement = GearRecommended
+			}
 			return nil
 		}
 		return errNotFound

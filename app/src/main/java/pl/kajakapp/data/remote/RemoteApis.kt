@@ -20,6 +20,9 @@ data class ImgwHydroDto(
     @SerialName("id_stacji") val stationId: String? = null,
     @SerialName("stacja") val station: String? = null,
     @SerialName("rzeka") val river: String? = null,
+    /** Współrzędne stacji – IMGW podaje je tekstem (kropka lub przecinek dziesiętny). */
+    @SerialName("lon") val lon: String? = null,
+    @SerialName("lat") val lat: String? = null,
     @SerialName("stan_ostrzegawczy") val warningLevel: String? = null,
     @SerialName("stan_alarmowy") val alarmLevel: String? = null,
     @SerialName("stan_wody") val waterLevel: String? = null,
@@ -37,7 +40,18 @@ interface ImgwApi {
 @Serializable
 data class OpenMeteoResponse(
     val current: OpenMeteoCurrent? = null,
-    val daily: OpenMeteoDaily? = null
+    val daily: OpenMeteoDaily? = null,
+    val hourly: OpenMeteoHourly? = null
+)
+
+/** Prognoza godzinowa; czasy są lokalne dla żądanej strefy, np. "2026-10-05T14:00". */
+@Serializable
+data class OpenMeteoHourly(
+    val time: List<String> = emptyList(),
+    @SerialName("temperature_2m") val temperature: List<Double?> = emptyList(),
+    val precipitation: List<Double?> = emptyList(),
+    @SerialName("wind_gusts_10m") val windGusts: List<Double?> = emptyList(),
+    @SerialName("weather_code") val weatherCode: List<Int?> = emptyList()
 )
 
 @Serializable
@@ -64,6 +78,18 @@ interface OpenMeteoApi {
         @Query("wind_speed_unit") windSpeedUnit: String = "ms",
         @Query("forecast_days") forecastDays: Int = 1,
         @Query("timezone") timezone: String = "auto"
+    ): OpenMeteoResponse
+
+    /** Prognoza godzinowa na wybrane dni (do 16 dni naprzód). */
+    @GET("v1/forecast")
+    suspend fun hourly(
+        @Query("latitude") latitude: Double,
+        @Query("longitude") longitude: Double,
+        @Query("start_date") startDate: String,
+        @Query("end_date") endDate: String,
+        @Query("hourly") hourly: String = "temperature_2m,precipitation,wind_gusts_10m,weather_code",
+        @Query("wind_speed_unit") windSpeedUnit: String = "ms",
+        @Query("timezone") timezone: String = "Europe/Warsaw"
     ): OpenMeteoResponse
 }
 

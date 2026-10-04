@@ -314,8 +314,11 @@ fun StartScreen(
             AppTopBar(
                 title = { Text("Eddy", fontWeight = FontWeight.Bold) },
                 actions = {
-                    IconButton(onClick = { confirmHelp = true }) {
-                        LifebuoyIcon(Modifier.size(26.dp))
+                    // Przycisk SOS tylko podczas trwającej trasy.
+                    if (live != null) {
+                        IconButton(onClick = { confirmHelp = true }) {
+                            LifebuoyIcon(Modifier.size(26.dp))
+                        }
                     }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Konto i ustawienia")
@@ -330,6 +333,7 @@ fun StartScreen(
                 modifier = Modifier.fillMaxSize(),
                 followUser = locationGranted,
                 ornamentsOnTop = true,
+                showLogo = false,
                 recenterKey = recenter,
                 people = mapPeople,
                 focus = focusPoint,
@@ -446,7 +450,8 @@ fun StartScreen(
                         trip == null -> "Nie masz teraz spływu udostępnionego na serwerze, więc wezwanie nikogo nie powiadomi. " +
                             "W razie zagrożenia życia zadzwoń pod numer 112 (nad wodą także GOPR/WOPR: 601 100 300)."
                         else -> "Wszyscy uczestnicy spływu „${trip.title}” dostaną informację, że wzywasz pomocy, " +
-                            "i zobaczą Twoją pozycję na mapie. W razie zagrożenia życia zadzwoń też pod numer 112."
+                            "i zobaczą Twoją pozycję na mapie. Alarm dostaną też osoby, które są teraz w trasie na tej samej rzece. " +
+                            "W razie zagrożenia życia zadzwoń też pod numer 112."
                     }
                 )
             },

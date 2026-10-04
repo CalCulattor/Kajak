@@ -14,6 +14,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -23,6 +25,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -31,7 +34,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import pl.kajakapp.domain.RiverSearch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -52,6 +59,7 @@ fun RiversScreen(
     val syncing by vm.syncing.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    var query by rememberSaveable { mutableStateOf("") }
 
     // Przy wejściu na ekran (także po powrocie z formularza trasy) wyślij i pobierz trasy.
     LaunchedEffect(Unit) { vm.refresh(manual = false) }
@@ -79,6 +87,22 @@ fun RiversScreen(
                     }
                 )
                 if (syncing) LinearProgressIndicator(Modifier.fillMaxWidth())
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    singleLine = true,
+                    placeholder = { Text("Szukaj rzeki lub odcinka") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (query.isNotEmpty()) {
+                            IconButton(onClick = { query = "" }) {
+                                Icon(Icons.Default.Close, contentDescription = "Wyczyść")
+                            }
+                        }
+                    },
+                    shape = MaterialTheme.shapes.extraLarge
+                )
             }
         },
         floatingActionButton = {
@@ -87,13 +111,25 @@ fun RiversScreen(
             }
         }
     ) { padding ->
-        val list = items
+        // Pasująca rzeka pokazuje wszystkie swoje odcinki; w pozostałych zostają tylko pasujące odcinki.
+        val list = items?.mapNotNull { item ->
+            if (query.isBlank()) return@mapNotNull item
+            val riverHit = RiverSearch.matches(query, item.river.name, item.river.region)
+            val hits = item.sections.filter {
+                RiverSearch.matches(query, item.river.name, it.name, it.putIn, it.takeOut)
+            }
+            when {
+                riverHit -> item
+                hits.isNotEmpty() -> item.copy(sections = hits)
+                else -> null
+            }
+        }
         when {
             list == null -> Box(Modifier.fillMaxSize().padding(padding), Alignment.Center) {
                 CircularProgressIndicator()
             }
             list.isEmpty() -> Box(Modifier.fillMaxSize().padding(padding), Alignment.Center) {
-                Text("Brak rzek w bazie.")
+                Text(if (query.isBlank()) "Brak rzek w bazie." else "Nic nie znaleziono dla „${query.trim()}”.")
             }
             else -> LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(padding),

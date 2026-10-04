@@ -155,6 +155,7 @@ func TestWritesRequireLogin(t *testing.T) {
 		{"DELETE", "/api/trips/1/participants/1"},
 		{"POST", "/api/trips/1/gear"},
 		{"PATCH", "/api/trips/1/gear/1"},
+		{"PUT", "/api/trips/1/gear/1/confirm"},
 		{"DELETE", "/api/trips/1/gear/1"},
 		{"GET", "/api/trips/1/checkins"},
 		{"POST", "/api/trips/1/checkins"},
@@ -234,14 +235,40 @@ func TestTripPermissions(t *testing.T) {
 	if len(detail.Participants) != 2 {
 		t.Fatalf("uczestnicy: %+v", detail.Participants)
 	}
-	code, body = callAs(t, ola, "POST", url+"/gear", map[string]any{"name": "Namiot", "assigned_to": "ola"})
+	// Wyposażenie układa tylko organizator.
+	if code, _ = callAs(t, ola, "POST", url+"/gear", map[string]any{"name": "Namiot"}); code != 403 {
+		t.Errorf("wyposażenie przez zwykłego uczestnika: %d", code)
+	}
+	code, body = callAs(t, owner, "POST", url+"/gear", map[string]any{"name": "Namiot", "assigned_to": "ola", "requirement": "required"})
 	var gear GearItem
 	decodeInto(t, body, &gear)
 	if code != 201 || gear.AssignedTo == nil || *gear.AssignedTo != "Ola" {
 		t.Fatalf("gear: %d %s", code, body)
 	}
+	if gear.Requirement != "required" {
+		t.Errorf("requirement: %q", gear.Requirement)
+	}
 	if code, _ = callAs(t, ola, "PATCH", url+"/gear/"+itoa(gear.ID), map[string]any{"assigned_to": "Ewa"}); code != 400 {
 		t.Errorf("przypisanie do nie-uczestnika: %d", code)
+	}
+	if code, _ = callAs(t, ola, "PATCH", url+"/gear/"+itoa(gear.ID), map[string]any{"requirement": "recommended"}); code != 403 {
+		t.Errorf("zmiana wymagalności przez uczestnika: %d", code)
+	}
+	if code, _ = callAs(t, ola, "DELETE", url+"/gear/"+itoa(gear.ID), nil); code != 403 {
+		t.Errorf("usunięcie pozycji przez uczestnika: %d", code)
+	}
+	// Każdy potwierdza tylko za siebie.
+	code, body = callAs(t, ola, "PUT", url+"/gear/"+itoa(gear.ID)+"/confirm", map[string]any{"confirmed": true})
+	var confirmed GearItem
+	decodeInto(t, body, &confirmed)
+	if code != 200 || len(confirmed.ConfirmedBy) != 1 || confirmed.ConfirmedBy[0] != "Ola" {
+		t.Fatalf("potwierdzenie: %d %s", code, body)
+	}
+	if code, _ = callAs(t, ewa, "PUT", url+"/gear/"+itoa(gear.ID)+"/confirm", map[string]any{"confirmed": true}); code != 403 {
+		t.Errorf("potwierdzenie przez obcego: %d", code)
+	}
+	if code, _ = callAs(t, ola, "PUT", url+"/gear/"+itoa(gear.ID)+"/confirm", map[string]any{}); code != 400 {
+		t.Errorf("potwierdzenie bez pola: %d", code)
 	}
 
 	// Zameldować można tylko siebie.

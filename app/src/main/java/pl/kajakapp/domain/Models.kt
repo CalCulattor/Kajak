@@ -44,7 +44,12 @@ data class WeatherSnapshot(
     val windGustMs: Double?,
     val precipitationMm: Double?,
     val thunderstorm: Boolean,
-    val fetchedAt: Long = 0L
+    val fetchedAt: Long = 0L,
+    /**
+     * null = prognoza na cały dzień (bieżące warunki); wartość = prognoza na okno godzinowe
+     * (opady to suma z tego okna, wiatr to najsilniejszy poryw w oknie).
+     */
+    val windowHours: Int? = null
 ) {
     val hasData: Boolean
         get() = airTempC != null || windGustMs != null || precipitationMm != null || thunderstorm
@@ -57,7 +62,11 @@ enum class RiskLevel(val label: String) {
     EXTREME("Skrajne warunki")
 }
 
-data class RiskFactor(val level: RiskLevel, val message: String)
+/**
+ * Jeden powód oceny. Czynnik [informational] jest pokazywany użytkownikowi, ale nie zmienia oceny
+ * ogólnej (np. stan wody ze stacji bez progów ostrzegawczych – tego poziomu nie da się ocenić automatycznie).
+ */
+data class RiskFactor(val level: RiskLevel, val message: String, val informational: Boolean = false)
 
 data class RiskAssessment(val level: RiskLevel, val factors: List<RiskFactor>)
 

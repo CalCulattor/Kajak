@@ -106,7 +106,18 @@ type GearItem struct {
 	Name       string  `json:"name"`
 	AssignedTo *string `json:"assigned_to"`
 	Packed     bool    `json:"packed"`
+	// Requirement: „required” (wymagane) albo „recommended” (zalecane); ustawia organizator.
+	Requirement string `json:"requirement"`
+	// ConfirmedBy: uczestnicy, którzy potwierdzili, że mają ten element (każdy potwierdza tylko siebie).
+	ConfirmedBy []string `json:"confirmed_by"`
 }
+
+const (
+	GearRequired    = "required"
+	GearRecommended = "recommended"
+)
+
+func validRequirement(s string) bool { return s == GearRequired || s == GearRecommended }
 
 type CheckIn struct {
 	ID         int64     `json:"id"`

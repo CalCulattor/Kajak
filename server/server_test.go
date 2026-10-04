@@ -568,3 +568,69 @@ func findLocation(list []LocationView, name string) *LocationView {
 	}
 	return nil
 }
+
+func TestSOSReachesGroupAndSameRiver(t *testing.T) {
+	ts, _ := newTestServer(t, "")
+	mk := func(token, key string) int64 {
+		code, body := callAs(t, token, "POST", ts.URL+"/api/trips", map[string]any{
+			"title": "T-" + key, "section_key": key, "start_date": futureDate(), "overnight": false,
+		})
+		if code != 201 {
+			t.Fatalf("trip: %d %s", code, body)
+		}
+		var tr Trip
+		decodeInto(t, body, &tr)
+		return tr.ID
+	}
+	ola := authToken(t, ts.URL, "Ola")
+	ala := authToken(t, ts.URL, "Ala")     // inny spływ, ta sama rzeka
+	ela := authToken(t, ts.URL, "Ela")     // inna rzeka
+	kasia := authToken(t, ts.URL, "Kasia") // ta sama rzeka, ale nie w trasie
+	t1 := mk(ola, "wda-a-b")
+	t2 := mk(ala, "wda-c-d")
+	t3 := mk(ela, "drawa-a-b")
+	t4 := mk(kasia, "wda-e-f")
+	pos := map[string]any{"lat": 53.4, "lon": 18.0}
+	for tok, id := range map[string]int64{ola: t1, ala: t2, ela: t3} {
+		if code, _ := callAs(t, tok, "PUT", ts.URL+"/api/trips/"+itoa(id)+"/location", pos); code != 204 {
+			t.Fatalf("location: %d", code)
+		}
+	}
+	_ = t4
+	if code, body := callAs(t, ola, "POST", ts.URL+"/api/trips/"+itoa(t1)+"/checkins",
+		map[string]any{"client_id": "s1", "lat": 53.41, "lon": 18.01, "needs_help": true}); code != 201 {
+		t.Fatalf("sos: %d %s", code, body)
+	}
+	get := func(tok string) []SOSAlert {
+		code, body := callAs(t, tok, "GET", ts.URL+"/api/sos", nil)
+		if code != 200 {
+			t.Fatalf("GET sos: %d", code)
+		}
+		var l []SOSAlert
+		decodeInto(t, body, &l)
+		return l
+	}
+	if l := get(ola); len(l) != 0 {
+		t.Fatalf("własne wezwanie nie powinno wracać: %+v", l)
+	}
+	if l := get(ala); len(l) != 1 || l[0].Member || l[0].TripTitle != "" || l[0].PersonName != "Ola" {
+		t.Fatalf("Ala (ta sama rzeka, w trasie) powinna dostać anonimowe wezwanie: %+v", l)
+	}
+	if l := get(ela); len(l) != 0 {
+		t.Fatalf("Ela (inna rzeka): %+v", l)
+	}
+	if l := get(kasia); len(l) != 0 {
+		t.Fatalf("Kasia (nie w trasie): %+v", l)
+	}
+	// Uczestnik grupy dostaje wezwanie ze szczegółami spływu, nawet bez trasy.
+	bob := authToken(t, ts.URL, "Bob")
+	if code, _ := callAs(t, bob, "POST", ts.URL+"/api/trips/"+itoa(t1)+"/participants", map[string]any{"car_seats": 0, "needs_kayak": false}); code != 201 {
+		t.Fatalf("join: %d", code)
+	}
+	if l := get(bob); len(l) != 1 || !l[0].Member || l[0].TripID != t1 {
+		t.Fatalf("grupa: %+v", l)
+	}
+	if code, _ := call(t, "GET", ts.URL+"/api/sos", nil); code != 200 {
+		t.Fatalf("tester: %d", code)
+	}
+}

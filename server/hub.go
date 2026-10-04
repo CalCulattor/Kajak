@@ -80,6 +80,9 @@ func (srv *Server) tripChanged(id int64) {
 
 func (srv *Server) tripsChanged() { srv.hub.Publish("trips", "{}") }
 
+// sosChanged: zmiana wezwań pomocy. Zdarzenie nic nie niesie – klient pobiera GET /api/sos.
+func (srv *Server) sosChanged() { srv.hub.Publish("sos", "{}") }
+
 func (srv *Server) routesChanged() { srv.hub.Publish("routes", "{}") }
 
 func (srv *Server) obstaclesChanged(sectionKey string) {

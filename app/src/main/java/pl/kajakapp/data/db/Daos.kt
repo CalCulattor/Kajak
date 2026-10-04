@@ -147,6 +147,12 @@ interface TripDao {
     @Query("UPDATE gear_items SET assignedTo = :assignee WHERE id = :id")
     suspend fun assignGear(id: Long, assignee: String?)
 
+    @Query("UPDATE gear_items SET requirement = :requirement WHERE id = :id")
+    suspend fun setGearRequirement(id: Long, requirement: String)
+
+    @Query("UPDATE gear_items SET confirmedBy = :confirmedBy WHERE id = :id")
+    suspend fun setGearConfirmedBy(id: Long, confirmedBy: String)
+
     @Query("DELETE FROM gear_items WHERE id = :id")
     suspend fun deleteGear(id: Long)
 
@@ -160,6 +166,9 @@ interface TripDao {
 
     @Query("SELECT * FROM trips WHERE id = :id")
     suspend fun getTrip(id: Long): TripEntity?
+
+    @Query("SELECT * FROM trips ORDER BY startDateUtcMillis")
+    suspend fun allTrips(): List<TripEntity>
 
     @Query("SELECT * FROM trips WHERE serverId = :serverId LIMIT 1")
     suspend fun findTripByServerId(serverId: Long): TripEntity?
@@ -244,6 +253,10 @@ interface TrackDao {
 
     @Query("SELECT * FROM track_points WHERE trackId = :trackId ORDER BY time, id")
     suspend fun pointsOf(trackId: Long): List<TrackPointEntity>
+
+    /** Same współrzędne punktów wielu tras (do mapy całej historii), w kolejności zapisu. */
+    @Query("SELECT trackId, lat, lon FROM track_points WHERE trackId IN (:trackIds) ORDER BY trackId, time, id")
+    suspend fun routePointsOf(trackIds: List<Long>): List<RoutePointRow>
 
     @Query("UPDATE tracks SET title = :title WHERE id = :id")
     suspend fun rename(id: Long, title: String)

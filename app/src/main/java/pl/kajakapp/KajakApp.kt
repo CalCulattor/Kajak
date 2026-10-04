@@ -9,7 +9,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import pl.kajakapp.notify.BackgroundWatcher
+import pl.kajakapp.notify.NotificationPrefs
+import pl.kajakapp.notify.Notifier
+import pl.kajakapp.notify.WatchReceiver
 import pl.kajakapp.data.ConditionsRepository
 import pl.kajakapp.data.LiveUpdates
 import pl.kajakapp.data.RiverRepository
@@ -32,6 +38,20 @@ class AppContainer(app: Application, scope: CoroutineScope) {
     val tracks = TrackRepository(db.trackDao())
     val recorder = TrackRecorder(db.trackDao(), settings)
     val conditions = ConditionsRepository(Network.imgw, Network.openMeteo, db.cacheDao())
+    val notificationPrefs = NotificationPrefs(app)
+    val notifier = Notifier(app)
+    val watcher = BackgroundWatcher(
+        db.tripDao(), settings, sync, rivers, conditions, notificationPrefs, notifier, { live.isForeground }
+    )
+
+    init {
+        notifier.ensureChannels()
+        live.onSynced = { watcher.checkSos() }
+        // Trwające nagrywanie = połączenie na żywo także w tle (natychmiastowe SOS).
+        scope.launch {
+            recorder.live.map { it != null }.distinctUntilChanged().collect { live.setKeepAlive(it) }
+        }
+    }
 }
 
 class KajakApp : Application() {
@@ -52,6 +72,7 @@ class KajakApp : Application() {
         getString(R.string.mapbox_access_token).takeIf { it.isNotBlank() }?.let { MapboxOptions.accessToken = it }
         container = AppContainer(this, appScope)
         appScope.launch { container.rivers.seedMissing() }
+        WatchReceiver.schedule(this)
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: Activity) {
                 started++

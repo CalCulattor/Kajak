@@ -18,6 +18,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -59,8 +60,16 @@ private fun NavController.switchTab(route: String) {
 }
 
 @Composable
-fun KajakAppRoot() {
+fun KajakAppRoot(openTripId: Long = -1L, onOpenTripHandled: () -> Unit = {}) {
     val nav = rememberNavController()
+    LaunchedEffect(openTripId) {
+        if (openTripId > 0) {
+            nav.navigate(Routes.trip(openTripId)) { launchSingleTop = true }
+            onOpenTripHandled()
+        } else if (openTripId == 0L) {
+            onOpenTripHandled()
+        }
+    }
     val backStackEntry by nav.currentBackStackEntryAsState()
     val route = backStackEntry?.destination?.route
     val showBottomBar = route == Routes.START || route == Routes.RIVERS || route == Routes.TRIPS || route == Routes.HISTORY

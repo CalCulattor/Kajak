@@ -63,6 +63,8 @@ func (srv *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/obstacles/{id}/confirm", srv.voteObstacle(true))
 	mux.HandleFunc("POST /api/obstacles/{id}/remove-vote", srv.voteObstacle(false))
 
+	mux.HandleFunc("GET /api/sos", srv.listSOS)
+
 	mux.HandleFunc("GET /api/trips", srv.listTrips)
 	mux.HandleFunc("POST /api/trips", srv.createTrip)
 	mux.HandleFunc("GET /api/trips/{id}", srv.getTrip)
@@ -75,6 +77,7 @@ func (srv *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/trips/{id}/gear", srv.createGear)
 	mux.HandleFunc("PATCH /api/trips/{id}/gear/{gid}", srv.patchGear)
 	mux.HandleFunc("DELETE /api/trips/{id}/gear/{gid}", srv.deleteGear)
+	mux.HandleFunc("PUT /api/trips/{id}/gear/{gid}/confirm", srv.confirmGear)
 
 	mux.HandleFunc("GET /api/trips/{id}/checkins", srv.listCheckIns)
 	mux.HandleFunc("POST /api/trips/{id}/checkins", srv.createCheckIn)
@@ -619,8 +622,18 @@ func (srv *Server) promoteParticipant(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------- wyposażenie
 
 type createGearRequest struct {
-	Name       string  `json:"name"`
-	AssignedTo *string `json:"assigned_to"`
+	Name        string  `json:"name"`
+	AssignedTo  *string `json:"assigned_to"`
+	Requirement string  `json:"requirement"`
+}
+
+// requireGearOrganizer wymaga, by użytkownik był organizatorem spływu (listę wyposażenia układa organizator).
+func (srv *Server) requireGearOrganizer(w http.ResponseWriter, tripID int64, user string) bool {
+	if !srv.store.Access(tripID, user).Organizer {
+		writeError(w, http.StatusForbidden, "tylko organizator może zmieniać listę wyposażenia")
+		return false
+	}
+	return true
 }
 
 // validAssignee sprawdza, że przypisanie wskazuje uczestnika spływu (albo brak przypisania).
@@ -642,11 +655,19 @@ func (srv *Server) createGear(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, ok := srv.requireMember(w, r, tripID); !ok {
+	user, ok := srv.requireMember(w, r, tripID)
+	if !ok {
+		return
+	}
+	if !srv.requireGearOrganizer(w, tripID, user) {
 		return
 	}
 	var req createGearRequest
 	if !decode(w, r, &req) {
+		return
+	}
+	if req.Requirement != "" && !validRequirement(req.Requirement) {
+		writeError(w, http.StatusBadRequest, "requirement musi być „required” albo „recommended”")
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
@@ -662,7 +683,7 @@ func (srv *Server) createGear(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	g, err := srv.store.AddGear(tripID, GearItem{Name: req.Name, AssignedTo: assignee})
+	g, err := srv.store.AddGear(tripID, GearItem{Name: req.Name, AssignedTo: assignee, Requirement: req.Requirement})
 	if err != nil {
 		storeError(w, err)
 		return
@@ -680,7 +701,8 @@ func (srv *Server) patchGear(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, ok := srv.requireMember(w, r, tripID); !ok {
+	user, ok := srv.requireMember(w, r, tripID)
+	if !ok {
 		return
 	}
 
@@ -702,6 +724,16 @@ func (srv *Server) patchGear(w http.ResponseWriter, r *http.Request) {
 				}
 				patch.AssignedTo = &s
 			}
+		case "requirement":
+			var s string
+			if err := json.Unmarshal(v, &s); err != nil || !validRequirement(s) {
+				writeError(w, http.StatusBadRequest, "requirement musi być „required” albo „recommended”")
+				return
+			}
+			if !srv.requireGearOrganizer(w, tripID, user) {
+				return
+			}
+			patch.Requirement = &s
 		case "packed":
 			var b bool
 			if err := json.Unmarshal(v, &b); err != nil {
@@ -714,8 +746,8 @@ func (srv *Server) patchGear(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if !patch.AssignedToSet && patch.Packed == nil {
-		writeError(w, http.StatusBadRequest, "podaj assigned_to lub packed")
+	if !patch.AssignedToSet && patch.Packed == nil && patch.Requirement == nil {
+		writeError(w, http.StatusBadRequest, "podaj assigned_to, packed lub requirement")
 		return
 	}
 	if patch.AssignedToSet {
@@ -743,7 +775,11 @@ func (srv *Server) deleteGear(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, ok := srv.requireMember(w, r, tripID); !ok {
+	user, ok := srv.requireMember(w, r, tripID)
+	if !ok {
+		return
+	}
+	if !srv.requireGearOrganizer(w, tripID, user) {
 		return
 	}
 	if err := srv.store.DeleteGear(tripID, gid); err != nil {
@@ -752,6 +788,41 @@ func (srv *Server) deleteGear(w http.ResponseWriter, r *http.Request) {
 	}
 	srv.tripChanged(tripID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type confirmGearRequest struct {
+	Confirmed *bool `json:"confirmed"`
+}
+
+// confirmGear: uczestnik potwierdza (albo cofa potwierdzenie), że ma dany element – zawsze tylko za siebie.
+func (srv *Server) confirmGear(w http.ResponseWriter, r *http.Request) {
+	tripID, ok := pathID(w, r, "id")
+	if !ok {
+		return
+	}
+	gid, ok := pathID(w, r, "gid")
+	if !ok {
+		return
+	}
+	user, ok := srv.requireMember(w, r, tripID)
+	if !ok {
+		return
+	}
+	var req confirmGearRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.Confirmed == nil {
+		writeError(w, http.StatusBadRequest, "podaj confirmed (true albo false)")
+		return
+	}
+	g, err := srv.store.SetGearConfirmed(tripID, gid, user, *req.Confirmed)
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	srv.tripChanged(tripID)
+	writeJSON(w, http.StatusOK, g)
 }
 
 // ---------------------------------------------------------------- zameldowania
@@ -837,6 +908,9 @@ func (srv *Server) createCheckIn(w http.ResponseWriter, r *http.Request) {
 	if created {
 		srv.tripChanged(tripID)
 	}
+	if created && c.NeedsHelp {
+		srv.sosChanged()
+	}
 	writeJSON(w, status, c)
 }
 
@@ -873,5 +947,6 @@ func (srv *Server) patchCheckIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	srv.tripChanged(tripID)
+	srv.sosChanged()
 	writeJSON(w, http.StatusOK, c)
 }

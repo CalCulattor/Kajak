@@ -139,6 +139,8 @@ fun SectionScreen(sectionId: Long, onBack: () -> Unit) {
 
                 item { WeatherCard(state.weather, state.weatherStale) }
 
+                item { ForecastCheckerCard(state.forecast, onCheck = vm::checkForecast) }
+
                 item {
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -251,16 +253,22 @@ private fun WaterCard(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Woda", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             when {
-                !hasStation -> Text("Do tego odcinka nie przypisano wodowskazu.")
+                water == null && !hasStation ->
+                    Text("Szukam najbliższego wodowskazu na tej rzece. Jeśli nic się nie pojawi, odśwież dane albo ustaw wodowskaz ręcznie.")
                 water == null -> Text("Brak danych z wodowskazu „$stationName”. Spróbuj odświeżyć.")
                 else -> {
-                    Text("Wodowskaz: ${water.stationName}")
-                    Text("Stan wody: ${water.levelCm?.let { "$it cm" } ?: "brak"}")
+                    Text("Wodowskaz: ${water.stationName}" + if (!hasStation) " (najbliższy na tej rzece)" else "")
+                    Text("Stan wody: ${water.levelCm?.let { "$it cm" } ?: "brak odczytu"}")
                     water.flowM3s?.let { Text("Przepływ: ${num1(it)} m³/s") }
                     water.waterTempC?.let { Text("Temperatura wody: ${num1(it)} °C") }
                     if (water.warningCm != null || water.alarmCm != null) {
                         Text(
                             "Stan ostrzegawczy: ${water.warningCm ?: "–"} cm\talarmowy: ${water.alarmCm ?: "–"} cm",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    } else {
+                        Text(
+                            "Stacja nie podaje progów ostrzegawczych – oceń stan wody samodzielnie.",
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
@@ -270,7 +278,7 @@ private fun WaterCard(
                     )
                     if (stale) {
                         Text(
-                            "Dane starsze niż ${DataFreshness.MAX_AGE_HOURS} godz. – nie użyto ich do oceny ryzyka.",
+                            "Odczyt starszy niż ${DataFreshness.WATER_MEASUREMENT_MAX_AGE_HOURS} godz. albo dawno nie odświeżany – nie użyto go do oceny ryzyka.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error
                         )

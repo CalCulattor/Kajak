@@ -18,6 +18,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -81,6 +82,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenAuth: () -> Unit) {
                 )
                 OutlinedButton(onClick = onOpenAuth) { Text("Zaloguj / zarejestruj") }
             }
+            NotificationSettings()
             Text("Połączenie", style = MaterialTheme.typography.titleMedium)
             Text(
                 "Przez serwer aplikacja wymienia trasy, przeszkody, spływy i zameldowania z innymi " +
@@ -117,4 +119,60 @@ fun SettingsScreen(onBack: () -> Unit, onOpenAuth: () -> Unit) {
             )
         }
     }
+}
+
+@Composable
+private fun NotificationSettings() {
+    val container = rememberContainer()
+    val prefs = container.notificationPrefs
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var sos by remember { mutableStateOf(prefs.sosEnabled) }
+    var conditions by remember { mutableStateOf(prefs.conditionsEnabled) }
+    var allowed by remember { mutableStateOf(container.notifier.canNotify()) }
+    val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { allowed = container.notifier.canNotify() }
+
+    Text("Powiadomienia", style = MaterialTheme.typography.titleMedium)
+    if (!allowed) {
+        Text(
+            "Powiadomienia są wyłączone, więc nie dostaniesz alarmu SOS ani informacji o warunkach, " +
+                "gdy aplikacja jest zamknięta.",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        OutlinedButton(onClick = {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                launcher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+            // Gdy zgoda była już odrzucona, system nie pokaże okna – otwieramy ustawienia aplikacji.
+            if (!container.notifier.canNotify()) {
+                context.startActivity(
+                    android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
+        }) { Text("Zezwól na powiadomienia") }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.weight(1f)) {
+            Text("Wezwania pomocy (SOS)")
+            Text("Gdy ktoś z Twojego spływu prosi o pomoc.", style = MaterialTheme.typography.bodySmall)
+        }
+        Switch(checked = sos, onCheckedChange = { sos = it; prefs.sosEnabled = it })
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.weight(1f)) {
+            Text("Zmiana warunków na rzece")
+            Text(
+                "Gdy ocena warunków zmieni się na rzece Twojego spływu z najbliższych dni.",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        Switch(checked = conditions, onCheckedChange = { conditions = it; prefs.conditionsEnabled = it })
+    }
+    Text(
+        "W tle aplikacja sprawdza to co kilkanaście minut; podczas nagrywania trasy SOS dociera od razu.",
+        style = MaterialTheme.typography.bodySmall
+    )
 }

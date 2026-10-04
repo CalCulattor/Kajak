@@ -36,7 +36,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberTimePickerState
@@ -158,8 +157,7 @@ fun TripsScreen(onOpenTrip: (Long) -> Unit, onOpenSettings: () -> Unit) {
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                Fmt.utcDate(item.trip.startDateUtcMillis) + Fmt.timeSuffix(item.trip.startTime) +
-                                    if (item.trip.overnight) "\tz noclegiem" else "\tjednodniowy"
+                                Fmt.utcDate(item.trip.startDateUtcMillis) + Fmt.timeSuffix(item.trip.startTime)
                             )
                             item.sectionLabel?.let {
                                 Text(it, style = MaterialTheme.typography.bodySmall)
@@ -252,7 +250,7 @@ private fun CreateTripDialog(
     var title by remember { mutableStateOf("") }
     var organizer by remember { mutableStateOf("") }
     var sectionId by remember { mutableStateOf<Long?>(null) }
-    var overnight by remember { mutableStateOf(false) }
+    val overnight = false // opcja noclegu usunięta z formularza
     var dateMillis by remember { mutableLongStateOf(Fmt.todayUtcMidnight()) }
     var showDatePicker by remember { mutableStateOf(false) }
     var startTime by remember { mutableStateOf("") }
@@ -307,10 +305,6 @@ private fun CreateTripDialog(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
                     )
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Switch(checked = overnight, onCheckedChange = { overnight = it })
-                    Text("  Nocleg przy rzece", style = MaterialTheme.typography.bodyMedium)
                 }
             }
         },

@@ -197,7 +197,11 @@ data class GearItemEntity(
     val name: String,
     val assignedTo: String? = null,
     val packed: Boolean = false,
-    val serverId: Long? = null
+    val serverId: Long? = null,
+    /** "required" (wymagane) albo "recommended" (zalecane); ustawia organizator. */
+    val requirement: String = "recommended",
+    /** Uczestnicy, którzy potwierdzili, że mają ten element (nazwy rozdzielone znakiem nowej linii). */
+    val confirmedBy: String = ""
 )
 
 @Entity(
@@ -226,6 +230,9 @@ data class CheckInEntity(
     val pendingSync: Boolean = true,
     val serverId: Long? = null
 )
+
+/** Uproszczony punkt trasy (tylko położenie) – wynik zapytania dla mapy historii. */
+data class RoutePointRow(val trackId: Long, val lat: Double, val lon: Double)
 
 /** Nagrana trasa spływu (historia użytkownika). [endedAt] == null oznacza trasę w toku. */
 @Entity(tableName = "tracks", indices = [Index("startedAt")])

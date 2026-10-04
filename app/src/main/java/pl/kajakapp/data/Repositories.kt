@@ -12,6 +12,7 @@ import pl.kajakapp.data.db.SectionEntity
 import pl.kajakapp.data.db.SectionWithRiver
 import pl.kajakapp.data.db.TripEntity
 import pl.kajakapp.domain.Difficulty
+import pl.kajakapp.domain.GearRules
 import pl.kajakapp.domain.ObstacleType
 import pl.kajakapp.domain.RiverType
 
@@ -174,19 +175,35 @@ class TripRepository(db: AppDatabase) {
 
     suspend fun removeParticipant(id: Long) = dao.deleteParticipant(id)
 
-    suspend fun addGear(tripId: Long, name: String) {
-        dao.insertGear(listOf(GearItemEntity(tripId = tripId, name = name.trim())))
+    /**
+     * Dodaje wybrane pozycje wyposażenia (nazwa + wymagane/zalecane), pomijając te o takiej samej
+     * nazwie jak istniejące. Zwraca liczbę dodanych pozycji.
+     */
+    suspend fun addGearItems(tripId: Long, items: List<Pair<String, String>>, existingNames: Set<String>): Int {
+        val existing = existingNames.map { it.trim().lowercase() }.toMutableSet()
+        val toAdd = ArrayList<GearItemEntity>()
+        for ((rawName, requirement) in items) {
+            val name = rawName.trim()
+            if (name.isEmpty() || !existing.add(name.lowercase())) continue
+            toAdd += GearItemEntity(
+                tripId = tripId,
+                name = name,
+                requirement = GearRules.normalizeRequirement(requirement)
+            )
+        }
+        if (toAdd.isNotEmpty()) dao.insertGear(toAdd)
+        return toAdd.size
     }
 
-    /** Dodaje propozycje wyposażenia, pomijając pozycje o takiej samej nazwie jak istniejące. */
-    suspend fun addSuggestedGear(tripId: Long, overnight: Boolean, existingNames: Set<String>) {
-        val wanted = SeedData.baseGear + if (overnight) SeedData.overnightGear else emptyList()
-        val existing = existingNames.map { it.lowercase() }.toSet()
-        val toAdd = wanted
-            .filter { it.lowercase() !in existing }
-            .map { GearItemEntity(tripId = tripId, name = it) }
-        if (toAdd.isNotEmpty()) dao.insertGear(toAdd)
+    /** Zapisuje potwierdzenie (albo jego cofnięcie) przez [viewer]. Zwraca false, gdy pozycji nie ma. */
+    suspend fun setGearConfirmed(id: Long, viewer: String, confirmed: Boolean): Boolean {
+        val gear = dao.getGear(id) ?: return false
+        dao.setGearConfirmedBy(id, GearRules.withConfirmation(gear.confirmedBy, viewer, confirmed))
+        return true
     }
+
+    suspend fun setGearRequirement(id: Long, requirement: String) =
+        dao.setGearRequirement(id, GearRules.normalizeRequirement(requirement))
 
     suspend fun setGearPacked(id: Long, packed: Boolean) = dao.setGearPacked(id, packed)
     suspend fun assignGear(id: Long, assignee: String?) = dao.assignGear(id, assignee)

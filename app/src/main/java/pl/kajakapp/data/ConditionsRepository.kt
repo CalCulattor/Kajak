@@ -1,6 +1,7 @@
 package pl.kajakapp.data
 
 import java.time.LocalDateTime
+import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeParseException
 import kotlin.coroutines.cancellation.CancellationException
@@ -14,13 +15,23 @@ import pl.kajakapp.data.db.SectionEntity
 import pl.kajakapp.data.db.WaterCacheEntity
 import pl.kajakapp.data.db.WeatherCacheEntity
 import pl.kajakapp.data.remote.ImgwApi
+import pl.kajakapp.data.remote.ImgwHydroDto
 import pl.kajakapp.data.remote.OpenMeteoApi
+import pl.kajakapp.domain.ForecastRange
+import pl.kajakapp.domain.ForecastWindow
+import pl.kajakapp.domain.StationCandidate
+import pl.kajakapp.domain.StationMatcher
 import pl.kajakapp.domain.WaterReading
 import pl.kajakapp.domain.WeatherSnapshot
 
 enum class FetchStatus { OK, ERROR, NO_STATION, NOT_FOUND }
 
 data class RefreshResult(val water: FetchStatus, val weather: FetchStatus)
+
+enum class ForecastStatus { OK, PAST, TOO_FAR, NO_DATA, ERROR }
+
+/** Wynik zapytania o prognozę na termin; [weather] jest ustawione tylko przy [ForecastStatus.OK]. */
+data class ForecastFetch(val status: ForecastStatus, val weather: WeatherSnapshot? = null)
 
 /**
  * Pobiera stan wody (IMGW) i pogodę (Open-Meteo) i zapisuje ostatni wynik w bazie,
@@ -43,17 +54,36 @@ class ConditionsRepository(
         RefreshResult(water.await(), weather.await())
     }
 
+    /**
+     * Stan wody z IMGW. Gdy odcinek ma wpisany wodowskaz, szukamy go po nazwie (bez względu na wielkość liter
+     * i polskie znaki); gdy nie ma – wybieramy najbliższą stację na tej samej rzece.
+     */
     private suspend fun refreshWater(section: SectionEntity, riverName: String): FetchStatus {
         val stationName = section.stationName?.trim().orEmpty()
-        if (stationName.isEmpty()) {
-            cache.clearWater(section.id)
-            return FetchStatus.NO_STATION
-        }
         return try {
-            val byName = imgw.hydro().filter { it.station.equals(stationName, ignoreCase = true) }
-            val dto = byName.firstOrNull { it.river.equals(riverName, ignoreCase = true) }
-                ?: byName.singleOrNull()
-                ?: return FetchStatus.NOT_FOUND
+            val stations = imgw.hydro()
+            val candidates = stations.map {
+                StationCandidate(
+                    name = it.station.orEmpty(),
+                    river = it.river.orEmpty(),
+                    lat = it.lat.toCoordinate(),
+                    lon = it.lon.toCoordinate(),
+                    hasLevel = it.waterLevel.toDoubleOrNullPl() != null
+                )
+            }
+            val match = StationMatcher.pick(
+                stations = candidates,
+                stationName = stationName.ifEmpty { null },
+                riverName = riverName,
+                lat = section.lat,
+                lon = section.lon,
+                hints = listOf(section.name, section.putIn, section.takeOut)
+            )
+            if (match == null) {
+                cache.clearWater(section.id)
+                return if (stationName.isEmpty()) FetchStatus.NO_STATION else FetchStatus.NOT_FOUND
+            }
+            val dto: ImgwHydroDto = stations[match.index]
 
             cache.upsertWater(
                 WaterCacheEntity(
@@ -107,23 +137,89 @@ class ConditionsRepository(
         }
     }
 
+    /**
+     * Prognoza pogody na wybrany termin: okno [hours] godzin od [start] (czas lokalny, Europa/Warszawa).
+     * Wyniki są pamiętane przez kilka minut, żeby przełączanie terminów nie odpytywało serwera za każdym razem.
+     */
+    suspend fun forecast(
+        lat: Double,
+        lon: Double,
+        start: LocalDateTime,
+        hours: Int = ForecastWindow.DEFAULT_HOURS
+    ): ForecastFetch {
+        val now = LocalDateTime.now(IMGW_ZONE)
+        when (ForecastWindow.range(start, now)) {
+            ForecastRange.PAST -> return ForecastFetch(ForecastStatus.PAST)
+            ForecastRange.TOO_FAR -> return ForecastFetch(ForecastStatus.TOO_FAR)
+            ForecastRange.OK -> Unit
+        }
+        val key = "%.3f,%.3f|%s|%d".format(java.util.Locale.ROOT, lat, lon, start.withMinute(0).withSecond(0).withNano(0), hours)
+        val nowMillis = System.currentTimeMillis()
+        forecastCache[key]?.let { (at, snapshot) ->
+            if (nowMillis - at < FORECAST_CACHE_MS) return ForecastFetch(ForecastStatus.OK, snapshot)
+        }
+        return try {
+            val startDate = start.toLocalDate()
+            // Okno może przejść przez północ, więc pobieramy też następny dzień.
+            val resp = openMeteo.hourly(
+                latitude = lat,
+                longitude = lon,
+                startDate = startDate.toString(),
+                endDate = startDate.plusDays(1).toString()
+            )
+            val h = resp.hourly ?: return ForecastFetch(ForecastStatus.NO_DATA)
+            val snapshot = ForecastWindow.summarize(
+                times = h.time,
+                temperature = h.temperature,
+                precipitation = h.precipitation,
+                gusts = h.windGusts,
+                codes = h.weatherCode,
+                start = start,
+                hours = hours,
+                fetchedAt = nowMillis
+            ) ?: return ForecastFetch(ForecastStatus.NO_DATA)
+            forecastCache[key] = nowMillis to snapshot
+            ForecastFetch(ForecastStatus.OK, snapshot)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            ForecastFetch(ForecastStatus.ERROR)
+        }
+    }
+
+    private val forecastCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, WeatherSnapshot>>()
+
     private companion object {
         // Kody pogody WMO używane przez Open-Meteo: burza (95) oraz burza z gradem (96, 99).
         val THUNDERSTORM_CODES = setOf(95, 96, 99)
+        const val FORECAST_CACHE_MS = 10L * 60L * 1000L
     }
 }
 
 private val IMGW_ZONE: ZoneId = ZoneId.of("Europe/Warsaw")
 
-/** IMGW podaje czas lokalny w formacie "2026-10-02 16:20:00". */
+/**
+ * IMGW podaje czas lokalny jako "2026-10-02 16:20:00" (czasem bez sekund albo w formacie ISO ze strefą).
+ * Zwraca null, gdy tekstu nie da się odczytać – wtedy aplikacja pokazuje pomiar bez daty.
+ */
 internal fun parseImgwTime(value: String?): Long? {
     val text = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val iso = text.replace(' ', 'T')
     return try {
-        LocalDateTime.parse(text.replace(' ', 'T')).atZone(IMGW_ZONE).toInstant().toEpochMilli()
+        if (iso.endsWith("Z") || Regex(""".*[+-]\d{2}:?\d{2}$""").matches(iso)) {
+            OffsetDateTime.parse(iso).toInstant().toEpochMilli()
+        } else {
+            // "2026-10-02T16:20" (bez sekund) też jest poprawne dla LocalDateTime.parse.
+            LocalDateTime.parse(iso).atZone(IMGW_ZONE).toInstant().toEpochMilli()
+        }
     } catch (e: DateTimeParseException) {
         null
     }
 }
+
+/** Współrzędna z danych IMGW (tekst z kropką lub przecinkiem); null dla braku albo wartości spoza zakresu. */
+private fun String?.toCoordinate(): Double? =
+    this?.trim()?.replace(',', '.')?.toDoubleOrNull()?.takeIf { it in -180.0..180.0 && it != 0.0 }
 
 private fun String?.toDoubleOrNullPl(): Double? =
     this?.trim()?.replace(',', '.')?.toDoubleOrNull()

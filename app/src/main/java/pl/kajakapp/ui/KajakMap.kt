@@ -19,6 +19,7 @@ import androidx.core.view.doOnLayout
 import com.mapbox.geojson.Feature
 import com.mapbox.geojson.FeatureCollection
 import com.mapbox.geojson.LineString
+import com.mapbox.geojson.MultiLineString
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.EdgeInsets
@@ -49,6 +50,7 @@ import pl.kajakapp.data.PersonOnMap
 import pl.kajakapp.domain.PathPoint
 
 private const val SRC_ROUTE = "kajak-route"
+private const val SRC_TRACKS = "kajak-tracks"
 private const val SRC_START = "kajak-start"
 private const val SRC_END = "kajak-end"
 private const val SRC_PEOPLE = "kajak-people"
@@ -59,6 +61,7 @@ private const val LAYER_HELP_HALO = "kajak-help-halo"
 private const val LAYER_HELP = "kajak-help-dot"
 private const val LAYER_HELP_LABEL = "kajak-help-label"
 private const val LAYER_ROUTE = "kajak-route-line"
+private const val LAYER_TRACKS = "kajak-tracks-line"
 private const val LAYER_START = "kajak-start-dot"
 private const val LAYER_END = "kajak-end-dot"
 
@@ -75,6 +78,9 @@ private const val END_COLOR = "#C62828"
  *   (wymaga uprawnienia do lokalizacji – sprawdza to wołający)
  * @param fitPath po wczytaniu dopasowuje widok tak, by cały ślad był widoczny (podgląd zapisanej trasy)
  * @param showEnds rysuje zielony punkt startu i czerwony punkt końca
+ * @param tracks wiele tras naraz (przegląd historii): każda jest rysowana jako osobna linia
+ * @param fitTracks po wczytaniu tras dopasowuje widok tak, by wszystkie były widoczne
+ * @param showLogo false ukrywa logo Mapbox (np. na ekranie głównym, gdzie przeszkadza w układzie)
  */
 @Composable
 fun KajakMap(
@@ -83,6 +89,9 @@ fun KajakMap(
     followUser: Boolean = false,
     fitPath: Boolean = false,
     showEnds: Boolean = false,
+    tracks: List<List<PathPoint>> = emptyList(),
+    fitTracks: Boolean = false,
+    showLogo: Boolean = true,
     /** Przenosi logo i informację o źródłach map na górę (gdy dół ekranu zasłania panel). */
     ornamentsOnTop: Boolean = false,
     /** Zmiana tej wartości ponownie centruje mapę na użytkowniku (gdy włączone [followUser]). */
@@ -114,6 +123,8 @@ fun KajakMap(
         state.followUser = followUser
         state.fitPath = fitPath
         state.showEnds = showEnds
+        state.tracks = tracks
+        state.fitTracks = fitTracks
         state.recenterKey = recenterKey
         state.people = people
         state.focus = focus
@@ -129,6 +140,7 @@ fun KajakMap(
                     }
                     // Skala mapy jest zbędna – w jej miejscu aplikacja pokazuje wskaźnik GPS.
                     view.scalebar.updateSettings { enabled = false }
+                    if (!showLogo) view.logo.updateSettings { enabled = false }
                     if (ornamentsOnTop) {
                         val density = ctx.resources.displayMetrics.density
                         view.logo.updateSettings {
@@ -154,6 +166,8 @@ fun KajakMap(
                 state.followUser = followUser
                 state.fitPath = fitPath
                 state.showEnds = showEnds
+                state.tracks = tracks
+                state.fitTracks = fitTracks
                 state.recenterKey = recenterKey
                 state.people = people
                 state.focus = focus
@@ -175,6 +189,10 @@ private class MapState {
     var followUser = false
     var fitPath = false
     var showEnds = false
+    var tracks: List<List<PathPoint>> = emptyList()
+    var appliedTracks: List<List<PathPoint>>? = null
+    var fitTracks = false
+    var tracksFitted = false
     var recenterKey = 0
     var people: List<PersonOnMap> = emptyList()
     var focus: PathPoint? = null
@@ -186,6 +204,7 @@ private class MapState {
 }
 
 private fun applyAll(view: MapView, state: MapState) {
+    applyTracks(view, state)
     applyPath(view, state)
     applyPeople(view, state)
     applyFocus(view, state)
@@ -196,6 +215,16 @@ private fun hasMapToken(context: Context): Boolean =
     context.getString(R.string.mapbox_access_token).isNotBlank()
 
 private fun addRouteLayers(style: Style) {
+    style.addSource(geoJsonSource(SRC_TRACKS) {})
+    style.addLayer(
+        lineLayer(LAYER_TRACKS, SRC_TRACKS) {
+            lineColor(ROUTE_COLOR)
+            lineWidth(3.5)
+            lineOpacity(0.75)
+            lineCap(LineCap.ROUND)
+            lineJoin(LineJoin.ROUND)
+        }
+    )
     style.addSource(geoJsonSource(SRC_ROUTE) {})
     style.addSource(geoJsonSource(SRC_START) {})
     style.addSource(geoJsonSource(SRC_END) {})
@@ -313,6 +342,30 @@ private fun pointFeatures(p: PathPoint?): FeatureCollection =
     } else {
         FeatureCollection.fromFeature(Feature.fromGeometry(Point.fromLngLat(p.lon, p.lat)))
     }
+
+/** Rysuje wszystkie trasy z historii jako jedną warstwę (osobne linie, bez łączenia końca jednej z początkiem drugiej). */
+private fun applyTracks(view: MapView, state: MapState) {
+    val style = view.mapboxMap.style ?: return
+    val tracks = state.tracks
+    if (tracks !== state.appliedTracks) {
+        state.appliedTracks = tracks
+        val lines = tracks.filter { it.size >= 2 }.map { track -> track.map { Point.fromLngLat(it.lon, it.lat) } }
+        style.getSourceAs<GeoJsonSource>(SRC_TRACKS)?.featureCollection(
+            if (lines.isEmpty()) {
+                FeatureCollection.fromFeatures(ArrayList<Feature>())
+            } else {
+                FeatureCollection.fromFeature(Feature.fromGeometry(MultiLineString.fromLngLats(lines)))
+            }
+        )
+    }
+    if (state.fitTracks && !state.tracksFitted) {
+        val all = tracks.flatten().map { Point.fromLngLat(it.lon, it.lat) }
+        if (all.isNotEmpty()) {
+            state.tracksFitted = true
+            view.doOnLayout { view.mapboxMap.setCamera(fitCamera(view, all)) }
+        }
+    }
+}
 
 private fun applyPath(view: MapView, state: MapState) {
     val path = state.path

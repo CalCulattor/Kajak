@@ -24,7 +24,9 @@ import pl.kajakapp.data.remote.AuthRequest
 import pl.kajakapp.data.remote.CheckInHelpRequest
 import pl.kajakapp.data.remote.LocationRequest
 import pl.kajakapp.data.remote.CheckInRequest
+import pl.kajakapp.data.remote.GearConfirmRequest
 import pl.kajakapp.data.remote.GearPatchRequest
+import pl.kajakapp.data.remote.GearRequirementRequest
 import pl.kajakapp.data.remote.GearRequest
 import pl.kajakapp.data.remote.KajakServerApi
 import pl.kajakapp.data.remote.Network
@@ -34,6 +36,7 @@ import pl.kajakapp.data.remote.RouteRequest
 import pl.kajakapp.data.remote.TripDetailDto
 import pl.kajakapp.data.remote.TripRequest
 import pl.kajakapp.domain.Difficulty
+import pl.kajakapp.domain.GearRules
 import pl.kajakapp.domain.ObstacleType
 import pl.kajakapp.domain.RiverType
 import retrofit2.HttpException
@@ -43,6 +46,16 @@ import retrofit2.HttpException
  * (np. synchronizacja jest wyłączona albo wszystko poszło dobrze po cichu).
  */
 data class SyncOutcome(val ok: Boolean, val message: String)
+
+/** Wezwanie pomocy widoczne dla mnie. [localTripId] jest null, gdy to inna grupa na tej samej rzece. */
+data class SosAlertInfo(
+    val serverCheckInId: Long,
+    val person: String,
+    val lat: Double,
+    val lon: Double,
+    val localTripId: Long?,
+    val tripTitle: String
+)
 
 /** Uczestnik spływu widoczny na mapie. [helpCheckInId] to zameldowanie z prośbą o pomoc (0 = brak prośby). */
 data class PersonOnMap(
@@ -507,15 +520,32 @@ class SyncRepository(
             val match = remote.gear.firstOrNull {
                 it.id !in linkedGear && it.name.equals(g.name, ignoreCase = true)
             }
-            val remoteId = if (match != null) {
-                match.id
+            val remoteItem = if (match != null) {
+                match
             } else {
-                val created = api.addGear(serverTripId, GearRequest(g.name, assignee))
+                val created = api.addGear(
+                    serverTripId,
+                    GearRequest(g.name, assignee, GearRules.normalizeRequirement(g.requirement))
+                )
                 if (g.packed) api.patchGear(serverTripId, created.id, GearPatchRequest(assignee, true))
-                created.id
+                created
             }
-            linkedGear += remoteId
-            tripDao.updateGear(g.copy(serverId = remoteId))
+            // Własne potwierdzenie z telefonu trafia na serwer razem z pozycją.
+            val mineConfirmed = GearRules.isConfirmed(g.confirmedBy, user)
+            val remoteConfirmed = remoteItem.confirmedBy.any { it.equals(user, ignoreCase = true) }
+            val confirmedBy = if (mineConfirmed && !remoteConfirmed) {
+                api.confirmGear(serverTripId, remoteItem.id, GearConfirmRequest(true)).confirmedBy
+            } else {
+                remoteItem.confirmedBy
+            }
+            linkedGear += remoteItem.id
+            tripDao.updateGear(
+                g.copy(
+                    serverId = remoteItem.id,
+                    requirement = GearRules.normalizeRequirement(remoteItem.requirement),
+                    confirmedBy = GearRules.encode(confirmedBy)
+                )
+            )
         }
 
         for (c in tripDao.checkInsOf(tripId)) {
@@ -671,7 +701,15 @@ class SyncRepository(
             for (r in detail.gear) {
                 val local = localGear.firstOrNull { it.serverId == r.id }
                 if (local != null) {
-                    tripDao.updateGear(local.copy(name = r.name, assignedTo = r.assignedTo, packed = r.packed))
+                    tripDao.updateGear(
+                        local.copy(
+                            name = r.name,
+                            assignedTo = r.assignedTo,
+                            packed = r.packed,
+                            requirement = GearRules.normalizeRequirement(r.requirement),
+                            confirmedBy = GearRules.encode(r.confirmedBy)
+                        )
+                    )
                 } else {
                     tripDao.insertGearItem(
                         GearItemEntity(
@@ -679,7 +717,9 @@ class SyncRepository(
                             name = r.name,
                             assignedTo = r.assignedTo,
                             packed = r.packed,
-                            serverId = r.id
+                            serverId = r.id,
+                            requirement = GearRules.normalizeRequirement(r.requirement),
+                            confirmedBy = GearRules.encode(r.confirmedBy)
                         )
                     )
                 }
@@ -800,6 +840,38 @@ class SyncRepository(
         }
     }
 
+    /** Wysyła własne potwierdzenie (albo jego cofnięcie) dla jednej pozycji wyposażenia. */
+    suspend fun pushGearConfirmation(gearId: Long, confirmed: Boolean): SyncOutcome {
+        if (!enabled) return disabled
+        return mutex.withLock {
+            guarded {
+                val gear = tripDao.getGear(gearId) ?: return@guarded disabled
+                val serverGearId = gear.serverId ?: return@guarded disabled
+                val serverTripId = tripDao.getTrip(gear.tripId)?.serverId ?: return@guarded disabled
+                api().confirmGear(serverTripId, serverGearId, GearConfirmRequest(confirmed))
+                SyncOutcome(true, "")
+            }
+        }
+    }
+
+    /** Wysyła zmienioną wymagalność pozycji (tylko organizator). */
+    suspend fun pushGearRequirement(gearId: Long): SyncOutcome {
+        if (!enabled) return disabled
+        return mutex.withLock {
+            guarded {
+                val gear = tripDao.getGear(gearId) ?: return@guarded disabled
+                val serverGearId = gear.serverId ?: return@guarded disabled
+                val serverTripId = tripDao.getTrip(gear.tripId)?.serverId ?: return@guarded disabled
+                api().patchGearRequirement(
+                    serverTripId,
+                    serverGearId,
+                    GearRequirementRequest(GearRules.normalizeRequirement(gear.requirement))
+                )
+                SyncOutcome(true, "")
+            }
+        }
+    }
+
     /** Wysyła własną pozycję uczestnikom spływu. Zwraca null, gdy się udało, albo opis problemu. */
     suspend fun pushLocation(localTripId: Long, lat: Double, lon: Double, fixAt: Long): String? {
         if (!enabled) return "Serwer jest wyłączony w ustawieniach."
@@ -828,6 +900,21 @@ class SyncRepository(
             throw e
         } catch (e: Exception) {
             // Brak sieci: serwer zapomni pozycję sam.
+        }
+    }
+
+    /** Aktywne wezwania pomocy widoczne dla mnie (z mojego spływu albo z tej samej rzeki); null = nie udało się pobrać. */
+    suspend fun fetchSos(): List<SosAlertInfo>? {
+        if (!enabled || !loggedIn) return null
+        return try {
+            api().sos().map {
+                val local = if (it.member && it.tripId > 0) tripDao.findTripByServerId(it.tripId) else null
+                SosAlertInfo(it.checkInId, it.personName, it.lat, it.lon, local?.id, local?.title ?: it.tripTitle)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
         }
     }
 

@@ -127,14 +127,27 @@ data class GearDto(
     val id: Long,
     val name: String,
     @SerialName("assigned_to") val assignedTo: String? = null,
-    val packed: Boolean = false
+    val packed: Boolean = false,
+    /** "required" albo "recommended"; starsze serwery tego pola nie wysyłają. */
+    val requirement: String = "recommended",
+    /** Uczestnicy, którzy potwierdzili, że mają ten element. */
+    @SerialName("confirmed_by") val confirmedBy: List<String> = emptyList()
 )
 
 @Serializable
 data class GearRequest(
     val name: String,
-    @SerialName("assigned_to") val assignedTo: String? = null
+    @SerialName("assigned_to") val assignedTo: String? = null,
+    val requirement: String = "recommended"
 )
+
+/** Zmiana wymagalności pozycji (tylko organizator). Pole bez wartości domyślnej, więc zawsze trafia do JSON-a. */
+@Serializable
+data class GearRequirementRequest(val requirement: String)
+
+/** Potwierdzenie (albo cofnięcie potwierdzenia) przez zalogowanego uczestnika – zawsze za siebie. */
+@Serializable
+data class GearConfirmRequest(val confirmed: Boolean)
 
 /** Oba pola bez wartości domyślnych, więc zawsze trafiają do JSON-a (także `assigned_to: null`). */
 @Serializable
@@ -181,6 +194,18 @@ data class LocationDto(
     @SerialName("updated_at") val updatedAt: String = "",
     @SerialName("needs_help") val needsHelp: Boolean = false,
     @SerialName("help_check_in_id") val helpCheckInId: Long = 0
+)
+
+@Serializable
+data class SosDto(
+    @SerialName("check_in_id") val checkInId: Long,
+    @SerialName("person_name") val personName: String,
+    val lat: Double = 0.0,
+    val lon: Double = 0.0,
+    @SerialName("river_key") val riverKey: String = "",
+    val member: Boolean = false,
+    @SerialName("trip_id") val tripId: Long = 0,
+    @SerialName("trip_title") val tripTitle: String = ""
 )
 
 @Serializable
@@ -259,6 +284,20 @@ interface KajakServerApi {
         @Body body: GearPatchRequest
     ): GearDto
 
+    @PATCH("api/trips/{id}/gear/{gid}")
+    suspend fun patchGearRequirement(
+        @Path("id") tripId: Long,
+        @Path("gid") id: Long,
+        @Body body: GearRequirementRequest
+    ): GearDto
+
+    @PUT("api/trips/{id}/gear/{gid}/confirm")
+    suspend fun confirmGear(
+        @Path("id") tripId: Long,
+        @Path("gid") id: Long,
+        @Body body: GearConfirmRequest
+    ): GearDto
+
     @DELETE("api/trips/{id}/gear/{gid}")
     suspend fun deleteGear(@Path("id") tripId: Long, @Path("gid") id: Long): Response<Unit>
 
@@ -270,6 +309,9 @@ interface KajakServerApi {
 
     @DELETE("api/trips/{id}/location")
     suspend fun deleteLocation(@Path("id") tripId: Long): Response<Unit>
+
+    @GET("api/sos")
+    suspend fun sos(): List<SosDto>
 
     @GET("api/trips/{id}/locations")
     suspend fun locations(@Path("id") tripId: Long): List<LocationDto>

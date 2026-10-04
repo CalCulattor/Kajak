@@ -47,9 +47,51 @@ class RiskAssessorTest {
     }
 
     @Test
-    fun missingThresholds_neverFavorable() {
+    fun missingThresholds_waterIsInformationalOnly() {
+        // Stacja bez progów: odczyt jest widoczny, ale ocenę wyznacza pogoda i przeszkody.
         val r = RiskAssessor.assess(water(warning = null, alarm = null), weather(), emptyList())
-        assertEquals(RiskLevel.UNKNOWN, r.level)
+        assertEquals(RiskLevel.FAVORABLE, r.level)
+        assertTrue(r.factors.any { it.informational && it.message.contains("oceń poziom samodzielnie") })
+    }
+
+    @Test
+    fun missingThresholds_stillWarnsAboutBadWeather() {
+        val r = RiskAssessor.assess(water(warning = null, alarm = null), weather(storm = true), emptyList())
+        assertEquals(RiskLevel.EXTREME, r.level)
+    }
+
+    @Test
+    fun noWaterReading_isStillUnknown() {
+        assertEquals(RiskLevel.UNKNOWN, RiskAssessor.assess(null, weather(), emptyList()).level)
+    }
+
+    @Test
+    fun forecast_ignoresMissingWater_butUsesWeather() {
+        val ok = RiskAssessor.assess(null, weather(), emptyList(), forecast = true)
+        assertEquals(RiskLevel.FAVORABLE, ok.level)
+        val bad = RiskAssessor.assess(null, weather(gust = 21.0), emptyList(), forecast = true)
+        assertEquals(RiskLevel.EXTREME, bad.level)
+    }
+
+    @Test
+    fun forecast_stillWarnsWhenWaterIsAlreadyHigh() {
+        val r = RiskAssessor.assess(water(level = 250), weather(), emptyList(), forecast = true)
+        assertEquals(RiskLevel.ELEVATED, r.level)
+    }
+
+    @Test
+    fun forecast_missingWeather_isUnknown() {
+        assertEquals(RiskLevel.UNKNOWN, RiskAssessor.assess(water(), null, emptyList(), forecast = true).level)
+    }
+
+    @Test
+    fun windowRain_usesLowerThresholds() {
+        val w = WeatherSnapshot(18.0, 5.0, 10.0, false, windowHours = 4)
+        assertEquals(RiskLevel.ELEVATED, RiskAssessor.assess(water(), w, emptyList(), forecast = true).level)
+        val heavy = w.copy(precipitationMm = 25.0)
+        assertEquals(RiskLevel.EXTREME, RiskAssessor.assess(water(), heavy, emptyList(), forecast = true).level)
+        // Te same 10 mm w skali doby to jeszcze nie ostrzeżenie.
+        assertEquals(RiskLevel.FAVORABLE, RiskAssessor.assess(water(), weather(rain = 10.0), emptyList()).level)
     }
 
     @Test

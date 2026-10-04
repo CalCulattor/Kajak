@@ -41,6 +41,14 @@ class LiveUpdates(
     scope: CoroutineScope
 ) {
     private val foreground = MutableStateFlow(false)
+    private val keepAlive = MutableStateFlow(false)
+
+    /** true = aplikacja jest na ekranie. */
+    val isForeground: Boolean get() = foreground.value
+
+    /** Wołane po każdej synchronizacji wywołanej zdarzeniem z serwera (np. do powiadomień SOS). */
+    @Volatile
+    var onSynced: (suspend () -> Unit)? = null
 
     private val _trips = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
@@ -51,10 +59,15 @@ class LiveUpdates(
         foreground.value = value
     }
 
+    /** Podczas nagrywania trasy utrzymujemy połączenie także z aplikacją w tle, żeby natychmiast dostać SOS. */
+    fun setKeepAlive(value: Boolean) {
+        keepAlive.value = value
+    }
+
     init {
         scope.launch {
-            combine(settings.url, settings.session, foreground) { url, session, fg ->
-                if (fg && url.isNotEmpty() && session != null) url to session.token else null
+            combine(settings.url, settings.session, foreground, keepAlive) { url, session, fg, keep ->
+                if ((fg || keep) && url.isNotEmpty() && session != null) url to session.token else null
             }.distinctUntilChanged().collectLatest { target ->
                 if (target != null) connectForever(target.first, target.second)
             }
@@ -166,6 +179,7 @@ class LiveUpdates(
                 "trip" -> number(e.data, "trip_id")?.let { tripIds += it }
                 "trips" -> tripList = true
                 "routes" -> routes = true
+                "sos" -> Unit // samo wywołanie onSynced (niżej) pobierze aktualną listę wezwań
                 "obstacles" -> text(e.data, "section_key")?.let { sections += it }
             }
         }
@@ -173,6 +187,7 @@ class LiveUpdates(
         for (id in tripIds) sync.syncTripByServerId(id)
         for (key in sections) sync.syncObstaclesByKey(key)
         if (tripList || tripIds.isNotEmpty()) _trips.tryEmit(Unit)
+        onSynced?.invoke()
     }
 
     private fun number(json: String, field: String): Long? =

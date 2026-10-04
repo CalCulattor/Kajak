@@ -5,7 +5,11 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import pl.kajakapp.data.LiveTrack
@@ -16,6 +20,7 @@ import pl.kajakapp.data.TrackRepository
 import pl.kajakapp.data.TripRepository
 import pl.kajakapp.data.db.TrackEntity
 import pl.kajakapp.data.db.TripEntity
+import pl.kajakapp.domain.PathPoint
 import pl.kajakapp.domain.TrackSummary
 
 private const val TRACK_STOP_TIMEOUT_MS = 5_000L
@@ -43,7 +48,7 @@ data class HistoryState(
 )
 
 class HistoryViewModel(
-    tracks: TrackRepository,
+    private val tracks: TrackRepository,
     private val recorder: TrackRecorder,
     trips: TripRepository,
     settings: ServerSettings
@@ -83,6 +88,14 @@ class HistoryViewModel(
             trips = tripList
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(TRACK_STOP_TIMEOUT_MS), HistoryState())
+
+    /** Ślady wszystkich tras z historii (jedna lista punktów na trasę) – do mapy przeglądowej. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val routes: StateFlow<List<List<PathPoint>>> = state
+        .map { s -> s.tracks.map { it.id } }
+        .distinctUntilChanged()
+        .mapLatest { ids -> if (ids.isEmpty()) emptyList() else tracks.routesOf(ids) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(TRACK_STOP_TIMEOUT_MS), emptyList())
 
     /** Wstrzymuje albo wznawia trasę w toku. */
     fun setPaused(paused: Boolean) {

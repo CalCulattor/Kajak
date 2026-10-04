@@ -14,21 +14,33 @@ object RiskAssessor {
     const val RAIN_EXTREME_MM = 50.0
     const val COLD_WATER_C = 10.0
 
+    // Progi dla prognozy na okno godzinowe (kilka godzin na wodzie), a nie na całą dobę.
+    const val RAIN_WINDOW_ELEVATED_MM = 8.0
+    const val RAIN_WINDOW_EXTREME_MM = 20.0
+
+    /**
+     * @param forecast true, gdy [weather] to prognoza na wybrany termin. Stan wody jest wtedy tylko
+     *   odczytem z chwili obecnej (nie da się go przewidzieć), więc wskazuje najwyżej na zagrożenie,
+     *   ale nigdy nie psuje oceny samym brakiem danych.
+     */
     fun assess(
         water: WaterReading?,
         weather: WeatherSnapshot?,
-        activeObstacles: List<ObstacleType>
+        activeObstacles: List<ObstacleType>,
+        forecast: Boolean = false
     ): RiskAssessment {
         val factors = buildList {
-            addAll(waterFactors(water))
+            addAll(if (forecast) forecastWaterFactors(water) else waterFactors(water))
             addAll(weatherFactors(weather))
             addAll(obstacleFactors(activeObstacles))
         }
 
-        val worstKnown = factors
+        // Czynniki informacyjne są widoczne dla użytkownika, ale nie wpływają na ocenę ogólną.
+        val rated = factors.filterNot { it.informational }
+        val worstKnown = rated
             .filter { it.level != RiskLevel.UNKNOWN }
             .maxOfOrNull { it.level }
-        val hasGap = factors.any { it.level == RiskLevel.UNKNOWN }
+        val hasGap = rated.any { it.level == RiskLevel.UNKNOWN }
 
         // Brak części danych nigdy nie może dać zielonego światła.
         val overall = when {
@@ -44,6 +56,27 @@ object RiskAssessor {
         RiskLevel.ELEVATED -> 2
         RiskLevel.UNKNOWN -> 1
         RiskLevel.FAVORABLE -> 0
+    }
+
+    /** Przy prognozie znamy tylko aktualny stan wody – groźny nadal ostrzega, resztę podajemy informacyjnie. */
+    private fun forecastWaterFactors(water: WaterReading?): List<RiskFactor> {
+        if (water == null) {
+            return listOf(
+                RiskFactor(RiskLevel.UNKNOWN, "Brak aktualnego odczytu z wodowskazu – prognoza dotyczy tylko pogody.", true)
+            )
+        }
+        val current = waterFactors(water).map { f ->
+            val message = "Aktualnie: " + f.message.replaceFirstChar { it.lowercaseChar() }
+            when (f.level) {
+                RiskLevel.ELEVATED, RiskLevel.EXTREME -> f.copy(message = message)
+                else -> f.copy(message = message, informational = true)
+            }
+        }
+        return current + RiskFactor(
+            RiskLevel.UNKNOWN,
+            "Stanu wody nie da się prognozować – ocena na wybrany termin uwzględnia pogodę i zgłoszone przeszkody.",
+            true
+        )
     }
 
     private fun waterFactors(water: WaterReading?): List<RiskFactor> {
@@ -68,9 +101,11 @@ object RiskAssessor {
                 "Stan wody $level cm przekracza stan ostrzegawczy ($warning cm)."
             )
         } else if (alarm == null && warning == null) {
+            // Bez progów nie wiemy, czy 100 cm to dużo, czy mało – pokazujemy odczyt, ale go nie oceniamy.
             out += RiskFactor(
                 RiskLevel.UNKNOWN,
-                "Stan wody $level cm, ale stacja nie ma progów ostrzegawczych – oceń poziom samodzielnie."
+                "Stan wody $level cm, ale stacja nie ma progów ostrzegawczych – oceń poziom samodzielnie.",
+                informational = true
             )
         } else {
             out += RiskFactor(RiskLevel.FAVORABLE, "Stan wody $level cm poniżej progów ostrzegawczych.")
@@ -117,16 +152,20 @@ object RiskAssessor {
 
         val rain = weather.precipitationMm
         if (rain != null) {
+            val window = weather.windowHours
+            val extreme = if (window != null) RAIN_WINDOW_EXTREME_MM else RAIN_EXTREME_MM
+            val elevated = if (window != null) RAIN_WINDOW_ELEVATED_MM else RAIN_ELEVATED_MM
+            val period = if (window != null) "w ciągu $window godz." else "dziś"
             out += when {
-                rain >= RAIN_EXTREME_MM -> RiskFactor(
+                rain >= extreme -> RiskFactor(
                     RiskLevel.EXTREME,
-                    "Bardzo intensywne opady (${fmt1(rain)} mm) – możliwy gwałtowny przybór wody."
+                    "Bardzo intensywne opady (${fmt1(rain)} mm $period) – możliwy gwałtowny przybór wody."
                 )
-                rain >= RAIN_ELEVATED_MM -> RiskFactor(
+                rain >= elevated -> RiskFactor(
                     RiskLevel.ELEVATED,
-                    "Intensywne opady (${fmt1(rain)} mm) – możliwy szybki przybór wody."
+                    "Intensywne opady (${fmt1(rain)} mm $period) – możliwy szybki przybór wody."
                 )
-                else -> RiskFactor(RiskLevel.FAVORABLE, "Opady dziś: ${fmt1(rain)} mm.")
+                else -> RiskFactor(RiskLevel.FAVORABLE, "Opady $period: ${fmt1(rain)} mm.")
             }
         }
 
