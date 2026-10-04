@@ -44,8 +44,7 @@ wyłącza synchronizację. „Testuj połączenie” sprawdza `GET /api/health`.
 Ograniczenia: bez konta aplikacja działa lokalnie i czyta trasy/przeszkody, ale wysyłanie danych i spływy
 na serwerze wymagają logowania. Konto nie ma odzyskiwania hasła. Trasy i przeszkody są publiczne,
 spływy widzą tylko ich uczestnicy (administrator serwera widzi wszystko). Przy synchronizacji spływu
-wygrywa stan z serwera. Usunięcie lub opuszczenie udostępnionego spływu wymaga połączenia (jest
-awaryjna opcja „Tylko z telefonu”, która nie zmienia serwera). Osoby wpisane ręcznie do spływu
+wygrywa stan z serwera. Usunięcie lub opuszczenie udostępnionego spływu wymaga połączenia. Osoby wpisane ręcznie do spływu
 lokalnego nie trafiają na serwer – zostają „tylko na tym telefonie”. Zalogowanie na inne konto lub
 inny serwer usuwa z telefonu kopie spływów poprzedniego konta.
 Trasy wymagają serwera z endpointem `/api/routes` (jest w `server/`; starsza wersja serwera zwróci 404
